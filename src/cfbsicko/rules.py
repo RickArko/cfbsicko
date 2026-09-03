@@ -139,9 +139,15 @@ def sort_standings(records: list[WeeklyRecord]) -> list[WeeklyRecord]:
     return sorted(records, key=lambda r: (-r.wins, r.losses, -r.ties, r.display_name.lower()))
 
 
-def payout_preview(paid_count: int) -> PayoutPreview:
-    pot = paid_count * BUY_IN_DOLLARS
-    first, second, third = (round(pot * share) for share in PAYOUT_SHARES)
+def payout_preview(
+    paid_count: int,
+    *,
+    buy_in: int = BUY_IN_DOLLARS,
+    shares: tuple[float, float, float] = PAYOUT_SHARES,
+    extra_owed: int = EXTRA_OWED,
+) -> PayoutPreview:
+    pot = paid_count * buy_in
+    first, second, third = (round(pot * share) for share in shares)
     # Keep the pot exact if rounding drifted.
     drift = pot - (first + second + third)
     first += drift
@@ -151,6 +157,6 @@ def payout_preview(paid_count: int) -> PayoutPreview:
         first=first,
         second=second,
         third=third,
-        extra_each_top=EXTRA_OWED,
-        extra_each_bottom=EXTRA_OWED,
+        extra_each_top=extra_owed,
+        extra_each_bottom=extra_owed,
     )

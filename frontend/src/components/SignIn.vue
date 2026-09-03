@@ -40,9 +40,13 @@ const note = ref("");
 const localLogin = ref(false);
 
 onMounted(async () => {
-  const cfg = await loadConfig();
-  localLogin.value = Boolean(cfg.local_login);
-  if (cfg.test_email) email.value = cfg.test_email;
+  try {
+    const cfg = await loadConfig();
+    localLogin.value = Boolean(cfg.local_login);
+    if (cfg.test_email) email.value = cfg.test_email;
+  } catch {
+    note.value = "Auth is unreachable. Try again in a moment.";
+  }
 });
 
 async function passwordLogin() {

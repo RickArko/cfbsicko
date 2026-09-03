@@ -21,11 +21,12 @@
       <p>{{ denied }}</p>
       <button class="ghost" type="button" @click="logout">Use a different email</button>
     </section>
-    <template v-else-if="!token && ready">
+    <template v-else-if="!token">
       <p v-if="hashNote" class="wrap muted">{{ hashNote }}</p>
       <SignIn @authed="refresh" />
     </template>
-    <router-view v-else-if="token" :token="token" :me="me" />
+    <p v-else-if="!me" class="wrap muted">Entering the league…</p>
+    <router-view v-else :token="token" :me="me" />
   </div>
 </template>
 
@@ -37,16 +38,20 @@ import { getToken, hashAuthError, signOut } from "../session.js";
 
 const token = ref(null);
 const me = ref(null);
-const ready = ref(false);
 const denied = ref("");
 const hashNote = ref("");
 
 async function refresh() {
   denied.value = "";
-  token.value = await getToken();
+  try {
+    token.value = await getToken();
+  } catch {
+    token.value = null;
+    me.value = null;
+    return;
+  }
   if (!token.value) {
     me.value = null;
-    ready.value = true;
     return;
   }
   try {
@@ -57,7 +62,6 @@ async function refresh() {
         ? "That email is not on this year’s list. Ask the commissioner."
         : exc.message;
   }
-  ready.value = true;
 }
 
 async function logout() {
@@ -65,7 +69,6 @@ async function logout() {
   token.value = null;
   me.value = null;
   denied.value = "";
-  ready.value = true;
 }
 
 onMounted(async () => {
