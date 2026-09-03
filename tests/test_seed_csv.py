@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from cfbsicko.db import connect
 from cfbsicko.import_sheet import import_master_sheet
-from cfbsicko.seed_csv import extract_sheet_to_csv, games_exist, seed_from_csv
+from cfbsicko.seed_csv import SeedConflictError, extract_sheet_to_csv, games_exist, seed_from_csv
 
 XLSX = Path(__file__).resolve().parents[1] / "data" / "assets" / "CFB Locks MASTER SHEET 2026.xlsx"
 COMMITTED = Path(__file__).resolve().parents[1] / "seeds" / "2026" / "week-01"
@@ -58,3 +60,63 @@ def test_committed_week1_seed(tmp_path):
     assert result.picks == 50
     assert set(result.empty_players) == {"Mike", "Rick"}
     assert games_exist(db) is True
+    conn = connect(db)
+    try:
+        scout = conn.execute(
+            """
+            SELECT p.raw_text, p.side, g.total, g.away, g.home
+            FROM picks p
+            JOIN users u ON u.id = p.user_id
+            JOIN games g ON g.id = p.game_id
+            WHERE u.display_name = 'Scout' AND p.slot = 4
+            """
+        ).fetchone()
+        assert scout["away"] == "UAB"
+        assert scout["home"] == "Illinois"
+        assert scout["total"] == 54.5
+        assert scout["side"] == "over"
+        assert "54.5" in scout["raw_text"]
+        assert "57.5" not in scout["raw_text"]
+    finally:
+        conn.close()
+
+
+def test_seed_refuses_existing_week_without_force(tmp_path):
+    db = tmp_path / "locks.db"
+    seed_from_csv(COMMITTED, db)
+    with pytest.raises(SeedConflictError, match="already has"):
+        seed_from_csv(COMMITTED, db)
+    again = seed_from_csv(COMMITTED, db, force=True)
+    assert again.picks == 50
+
+
+def test_seed_rejects_malformed_picks(tmp_path):
+    src = tmp_path / "bad"
+    src.mkdir()
+    for name in ("week.csv", "games.csv", "players.csv"):
+        (src / name).write_text((COMMITTED / name).read_text(), encoding="utf-8")
+    (src / "picks.csv").write_text(
+        "display_name,slot,away,home,market,side,raw_text\n"
+        "Stu,1,Indiana State,Purdue,total,under,Purdue/ISU Under 57.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Exactly 5"):
+        seed_from_csv(src, tmp_path / "locks.db")
+
+
+def test_extract_does_not_write_on_unmapped(tmp_path, monkeypatch):
+    from cfbsicko import seed_csv as mod
+
+    def boom(_raw, _games):
+        from cfbsicko.parse import MapReport
+
+        return MapReport(mapped=[], unmapped=["not a pick"], warnings=[])
+
+    monkeypatch.setattr(mod, "map_picks_to_slate", boom)
+    out = tmp_path / "week-01"
+    out.mkdir()
+    marker = out / "picks.csv"
+    marker.write_text("stale\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Unmapped"):
+        extract_sheet_to_csv(XLSX, out, season=2026)
+    assert marker.read_text(encoding="utf-8") == "stale\n"

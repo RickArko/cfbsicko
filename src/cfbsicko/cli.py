@@ -9,7 +9,7 @@ from pathlib import Path
 from cfbsicko.config import Config
 from cfbsicko.db import connect
 from cfbsicko.import_sheet import UnmappedPicksError, import_master_sheet
-from cfbsicko.seed_csv import extract_sheet_to_csv, games_exist, seed_from_csv
+from cfbsicko.seed_csv import SeedConflictError, extract_sheet_to_csv, games_exist, seed_from_csv
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,6 +39,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="No-op when the database already has games",
     )
+    seed.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing week's games/picks (destructive; backup first)",
+    )
 
     sub.add_parser("serve", help="Run the API (default)")
 
@@ -64,6 +69,11 @@ def main(argv: list[str] | None = None) -> int:
         "--i-reviewed",
         action="store_true",
         help="Required with --blast so a review pass cannot be skipped",
+    )
+    invite.add_argument(
+        "--to",
+        default=None,
+        help="Review inbox (default: first trial roster address)",
     )
 
     args = parser.parse_args(argv)
@@ -101,7 +111,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.if_empty and games_exist(db_path):
             print(f"seed skipped (games already present) {db_path}")
             return 0
-        result = seed_from_csv(Path(args.seed_dir), db_path)
+        try:
+            result = seed_from_csv(Path(args.seed_dir), db_path, force=args.force)
+        except SeedConflictError as exc:
+            print(exc, file=sys.stderr)
+            return 2
         print(
             f"seeded users={result.users} games={result.games} picks={result.picks} "
             f"empty={list(result.empty_players)}"
@@ -120,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         from cfbsicko.trial_roster import trial_emails
 
         recipients = trial_emails()
-        commish = (Config.commish_emails() or [recipients[0]])[0]
+        commish = (args.to or recipients[0]).strip().lower()
         app_url = Config.PUBLIC_APP_URL
         if "127.0.0.1" in app_url or "localhost" in app_url:
             app_url = "https://cfbsicko.com"
@@ -134,12 +148,20 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.review:
             subject, body = group_invite_review_body(app_url=app_url, recipients=recipients)
-            send_mail(commish, subject, body)
+            try:
+                send_mail(commish, subject, body)
+            except RuntimeError as exc:
+                print(exc, file=sys.stderr)
+                return 2
             print(f"review sent to {commish}")
             return 0
         if args.blast:
             subject, body = group_invite_body(app_url=app_url)
-            send_mail(recipients, subject, body)
+            try:
+                send_mail(recipients, subject, body)
+            except RuntimeError as exc:
+                print(exc, file=sys.stderr)
+                return 2
             print(f"blast sent to {len(recipients)} addresses")
             return 0
 

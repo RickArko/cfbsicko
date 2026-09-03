@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import csv
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 from cfbsicko.db import connect, transaction
-from cfbsicko.parse import map_picks_to_slate, parse_slate
-from cfbsicko.rules import default_week1_lock
+from cfbsicko.parse import SlateGame, map_picks_to_slate, parse_slate
+from cfbsicko.rules import PickSpec, PickValidationError, default_week1_lock, validate_pick_set
 
 WEEK_FIELDS = ("season", "week_no", "title", "lock_at", "status")
 GAME_FIELDS = ("sort_order", "day_label", "away", "home", "spread_home", "total")
@@ -24,6 +25,10 @@ class SeedResult:
     empty_players: tuple[str, ...]
 
 
+class SeedConflictError(ValueError):
+    """Week already has games or picks; refuse unless force=True."""
+
+
 def extract_sheet_to_csv(xlsx_path: Path, out_dir: Path, *, season: int = 2026) -> Path:
     from cfbsicko.sheet import read_master_sheet
 
@@ -31,40 +36,27 @@ def extract_sheet_to_csv(xlsx_path: Path, out_dir: Path, *, season: int = 2026) 
     games = parse_slate(sheet.slate_text)
     if not games:
         raise ValueError("No games parsed from slate")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    _write_csv(
-        out_dir / "week.csv",
-        WEEK_FIELDS,
-        [
-            {
-                "season": season,
-                "week_no": 1,
-                "title": "Week 1",
-                "lock_at": default_week1_lock(season).isoformat(),
-                "status": "open",
-            }
-        ],
-    )
-    _write_csv(
-        out_dir / "games.csv",
-        GAME_FIELDS,
-        [
-            {
-                "sort_order": idx,
-                "day_label": game.day_label,
-                "away": game.away,
-                "home": game.home,
-                "spread_home": game.spread_home,
-                "total": game.total,
-            }
-            for idx, game in enumerate(games)
-        ],
-    )
-    _write_csv(
-        out_dir / "players.csv",
-        PLAYER_FIELDS,
-        [{"display_name": player.display_name} for player in sheet.players],
-    )
+    week_rows = [
+        {
+            "season": season,
+            "week_no": 1,
+            "title": "Week 1",
+            "lock_at": default_week1_lock(season).isoformat(),
+            "status": "open",
+        }
+    ]
+    game_rows = [
+        {
+            "sort_order": idx,
+            "day_label": game.day_label,
+            "away": game.away,
+            "home": game.home,
+            "spread_home": game.spread_home,
+            "total": game.total,
+        }
+        for idx, game in enumerate(games)
+    ]
+    player_rows = [{"display_name": player.display_name} for player in sheet.players]
     pick_rows: list[dict[str, object]] = []
     unmapped: list[str] = []
     for player in sheet.players:
@@ -85,11 +77,16 @@ def extract_sheet_to_csv(xlsx_path: Path, out_dir: Path, *, season: int = 2026) 
                     "home": game.home,
                     "market": mapped.market,
                     "side": mapped.side,
-                    "raw_text": mapped.raw,
+                    "raw_text": _frozen_raw_text(mapped.raw, mapped.market, mapped.side, game),
                 }
             )
     if unmapped:
         raise ValueError("Unmapped picks:\n" + "\n".join(unmapped))
+    _validate_seed_rows(game_rows, pick_rows)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(out_dir / "week.csv", WEEK_FIELDS, week_rows)
+    _write_csv(out_dir / "games.csv", GAME_FIELDS, game_rows)
+    _write_csv(out_dir / "players.csv", PLAYER_FIELDS, player_rows)
     _write_csv(out_dir / "picks.csv", PICK_FIELDS, pick_rows)
     return out_dir
 
@@ -102,13 +99,14 @@ def games_exist(db_path: Path) -> bool:
         conn.close()
 
 
-def seed_from_csv(seed_dir: Path, db_path: Path) -> SeedResult:
+def seed_from_csv(seed_dir: Path, db_path: Path, *, force: bool = False) -> SeedResult:
     week = _read_csv(seed_dir / "week.csv")[0]
     games = _read_csv(seed_dir / "games.csv")
     players = _read_csv(seed_dir / "players.csv")
     picks = _read_csv(seed_dir / "picks.csv")
     if not games:
         raise ValueError(f"{seed_dir / 'games.csv'} has no games")
+    _validate_seed_rows(games, picks)
 
     season = int(week["season"])
     week_no = int(week["week_no"])
@@ -133,6 +131,18 @@ def seed_from_csv(seed_dir: Path, db_path: Path) -> SeedResult:
                     (season, week_no),
                 ).fetchone()["id"]
             )
+            existing_picks = int(
+                conn.execute("SELECT COUNT(*) AS n FROM picks WHERE week_id = ?", (week_id,)).fetchone()["n"]
+            )
+            existing_games = int(
+                conn.execute("SELECT COUNT(*) AS n FROM games WHERE week_id = ?", (week_id,)).fetchone()["n"]
+            )
+            if (existing_picks or existing_games) and not force:
+                raise SeedConflictError(
+                    f"Week {week_no} already has {existing_games} games and {existing_picks} picks. "
+                    "Refusing to replace live data. Re-run with --force only after a backup."
+                )
+            conn.execute("DELETE FROM week_records WHERE week_id = ?", (week_id,))
             conn.execute("DELETE FROM picks WHERE week_id = ?", (week_id,))
             conn.execute(
                 "DELETE FROM game_results WHERE game_id IN (SELECT id FROM games WHERE week_id = ?)",
@@ -216,6 +226,100 @@ def seed_from_csv(seed_dir: Path, db_path: Path) -> SeedResult:
         )
     finally:
         conn.close()
+
+
+def _assert_raw_matches_frozen(raw: str, market: str, side: str, game: dict[str, str]) -> None:
+    listed = (
+        float(game["total"])
+        if market == "total"
+        else (float(game["spread_home"]) if side == "home" else -float(game["spread_home"]))
+    )
+    written = _line_from_raw(raw)
+    if written is None:
+        return
+    if abs(abs(written) - abs(listed)) > 0.05:
+        raise ValueError(
+            f"raw_text {raw!r} does not match frozen line {listed:g} ({game['away']} at {game['home']})"
+        )
+
+
+def _line_from_raw(raw: str) -> float | None:
+    try:
+        return float(str(raw).rsplit(" ", 1)[-1])
+    except ValueError:
+        return None
+
+
+def _frozen_raw_text(raw: str, market: str, side: str, game: SlateGame) -> str:
+    """Board copy must match the frozen number used to grade."""
+    total = float(game.total)
+    spread_home = float(game.spread_home)
+    away = game.away
+    home = game.home
+    if market == "total":
+        written = None
+        try:
+            written = float(str(raw).rsplit(" ", 1)[-1])
+        except ValueError:
+            written = None
+        if written is not None and abs(written - total) <= 0.05:
+            return raw
+        label = "Over" if side == "over" else "Under"
+        return f"{away}/{home} {label} {total:g}"
+    listed = spread_home if side == "home" else -spread_home
+    try:
+        written = float(str(raw).rsplit(" ", 1)[-1])
+    except ValueError:
+        written = None
+    if written is not None and abs(abs(written) - abs(listed)) <= 0.05:
+        return raw
+    team = home if side == "home" else away
+    return f"{team} {listed:+g}"
+
+
+def _validate_seed_rows(games: list[dict[str, str]], picks: list[dict[str, str]]) -> None:
+    game_ids: dict[tuple[str, str], int] = {}
+    for idx, row in enumerate(games):
+        away = (row.get("away") or "").strip()
+        home = (row.get("home") or "").strip()
+        if not away or not home:
+            raise ValueError(f"games.csv row {idx + 1} is missing away/home")
+        try:
+            float(row["spread_home"])
+            float(row["total"])
+            int(row["sort_order"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"games.csv row {idx + 1} has invalid numbers") from exc
+        key = (away, home)
+        if key in game_ids:
+            raise ValueError(f"duplicate game {away} at {home}")
+        game_ids[key] = idx + 1
+    by_player: dict[str, list[PickSpec]] = defaultdict(list)
+    for row in picks:
+        name = (row.get("display_name") or "").strip()
+        key = ((row.get("away") or "").strip(), (row.get("home") or "").strip())
+        if key not in game_ids:
+            raise ValueError(f"pick references missing game {key}")
+        market = (row.get("market") or "").strip()
+        side = (row.get("side") or "").strip()
+        try:
+            slot = int(row["slot"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{name}: invalid slot") from exc
+        if market not in {"spread", "total"}:
+            raise ValueError(f"{name}: invalid market {market!r}")
+        if market == "spread" and side not in {"home", "away"}:
+            raise ValueError(f"{name}: spread side must be home or away")
+        if market == "total" and side not in {"over", "under"}:
+            raise ValueError(f"{name}: total side must be over or under")
+        game = next(g for g in games if (g["away"].strip(), g["home"].strip()) == key)
+        _assert_raw_matches_frozen(row.get("raw_text") or "", market, side, game)
+        by_player[name].append(PickSpec(game_id=game_ids[key], market=market, side=side, slot=slot))
+    for name, specs in by_player.items():
+        try:
+            validate_pick_set(specs)
+        except PickValidationError as exc:
+            raise ValueError(f"{name}: {exc}") from exc
 
 
 def _write_csv(path: Path, fields: tuple[str, ...], rows: list[dict[str, object]]) -> None:

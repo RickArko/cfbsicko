@@ -17,5 +17,10 @@ fi
 for name in week.csv games.csv players.csv picks.csv; do
   "${FLY_BIN}" ssh sftp put --app "${FLY_APP}" "${SEED_DIR}/${name}" "${REMOTE}/${name}"
 done
+# Never pass --force here. A retry after lock/grade must not wipe live picks.
+FORCE_FLAG=""
+if [[ "${FORCE:-}" == "1" ]]; then
+  FORCE_FLAG="--force"
+fi
 "${FLY_BIN}" ssh console --app "${FLY_APP}" -C \
-  "cfbsicko seed-csv ${REMOTE} --db-path /data/locks.db"
+  "cfbsicko seed-csv ${REMOTE} --db-path /data/locks.db ${FORCE_FLAG}"

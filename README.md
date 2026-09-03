@@ -16,7 +16,7 @@ make run
 
 Copy `.env.example` → `.env` and fill the dedicated Supabase project keys. Never point `DATABASE_PATH` at `~/.cfb_data/cfb.db`.
 
-Week 1 import maps Scout’s `ILL/UAB Over 57.5` onto the frozen Illinois/UAB total **54.5** and prints a warning. The published line wins.
+The sheet had Scout’s `ILL/UAB Over 57.5`; the frozen Illinois/UAB total is **54.5**. Extract rewrites the stored pick to `UAB/Illinois Over 54.5` so the board and the grader use the same number.
 
 ## Deploy
 
