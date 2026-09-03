@@ -9,7 +9,7 @@ from pathlib import Path
 from cfbsicko.config import Config
 from cfbsicko.db import connect
 from cfbsicko.import_sheet import UnmappedPicksError, import_master_sheet
-from cfbsicko.seed_csv import extract_sheet_to_csv, seed_from_csv
+from cfbsicko.seed_csv import extract_sheet_to_csv, games_exist, seed_from_csv
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,6 +34,11 @@ def main(argv: list[str] | None = None) -> int:
     seed = sub.add_parser("seed-csv", help="Load a CSV seed directory into SQLite")
     seed.add_argument("seed_dir")
     seed.add_argument("--db-path", default=None)
+    seed.add_argument(
+        "--if-empty",
+        action="store_true",
+        help="No-op when the database already has games",
+    )
 
     sub.add_parser("serve", help="Run the API (default)")
 
@@ -73,6 +78,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "seed-csv":
         db_path = Path(args.db_path).expanduser() if args.db_path else Config.database_path()
+        if args.if_empty and games_exist(db_path):
+            print(f"seed skipped (games already present) {db_path}")
+            return 0
         result = seed_from_csv(Path(args.seed_dir), db_path)
         print(
             f"seeded users={result.users} games={result.games} picks={result.picks} "

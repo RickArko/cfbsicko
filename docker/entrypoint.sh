@@ -22,10 +22,16 @@ if [ "${1:-}" = "cfbsicko" ]; then
       export DATABASE_PATH="${DATABASE_PATH:-/data/locks.db}"
       echo "Migrating ${DATABASE_PATH}..."
       cfbsicko migrate --db-path "${DATABASE_PATH}"
+      if [ -f /app/seeds/2026/week-01/games.csv ]; then
+        cfbsicko seed-csv /app/seeds/2026/week-01 --db-path "${DATABASE_PATH}" --if-empty
+      fi
     '
   else
     export DATABASE_PATH="${DATABASE_PATH:-/data/locks.db}"
     cfbsicko migrate --db-path "${DATABASE_PATH}"
+    if [ -f /app/seeds/2026/week-01/games.csv ]; then
+      cfbsicko seed-csv /app/seeds/2026/week-01 --db-path "${DATABASE_PATH}" --if-empty
+    fi
   fi
 fi
 

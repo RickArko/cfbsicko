@@ -297,8 +297,25 @@ def create_app(
 
     @app.post("/api/admin/invites")
     def admin_invite(body: InviteIn, user: dict[str, Any] = Depends(commish)):
+        from cfbsicko.mail import invite_body
+
         invite = create_invite(db(), email=body.email, display_name=body.display_name, invited_by=user["id"])
-        return {"email": invite["email"], "display_name": invite["display_name"], "id": invite["id"]}
+        subject, text = invite_body(
+            display_name=invite["display_name"],
+            app_url=Config.PUBLIC_APP_URL,
+        )
+        mailed = False
+        try:
+            _mail(invite["email"], subject, text)
+            mailed = True
+        except Exception:
+            mailed = False
+        return {
+            "email": invite["email"],
+            "display_name": invite["display_name"],
+            "id": invite["id"],
+            "mailed": mailed,
+        }
 
     @app.post("/api/admin/weeks")
     def admin_publish(body: SlateIn, user: dict[str, Any] = Depends(commish)):

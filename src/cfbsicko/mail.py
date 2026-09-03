@@ -70,12 +70,24 @@ def _message(to: str, subject: str, body: str) -> EmailMessage:
     return msg
 
 
+def invite_body(*, display_name: str | None, app_url: str) -> tuple[str, str]:
+    subject = "You're in — CFB Sicko 2026"
+    greeting = f"Hey {display_name},\n\n" if display_name else ""
+    body = (
+        f"{greeting}You're on the 2026 locks list.\n\n"
+        "Five locks a week against frozen Tuesday lines. Window closes Thursday 6pm ET.\n"
+        f"Lock your five: {app_url}/app\n\n"
+        "There is no public signup. Use the email this was sent to.\n"
+    )
+    return subject, body
+
+
 def slate_published_body(*, week_title: str, lock_at: str, app_url: str) -> tuple[str, str]:
     subject = f"{week_title} lines are up — five picks by Thursday 6pm ET"
     body = (
         f"{week_title} is open.\n\n"
         f"Submit exactly five picks against the published lines by {lock_at}.\n"
-        f"The sheet is here: {app_url}/app\n\n"
+        f"Lock your five: {app_url}/app\n\n"
         "Use the listed numbers even if the market moves.\n"
     )
     return subject, body
@@ -83,7 +95,7 @@ def slate_published_body(*, week_title: str, lock_at: str, app_url: str) -> tupl
 
 def lock_reminder_body(*, week_title: str, lock_at: str, have: int, app_url: str) -> tuple[str, str]:
     subject = f"Reminder: {week_title} picks lock at {lock_at}"
-    body = f"You have {have}/5 picks in for {week_title}.\nLock is {lock_at}. Finish here: {app_url}/app\n"
+    body = f"You have {have}/5 picks in for {week_title}.\nLock is {lock_at}. Lock your five: {app_url}/app\n"
     return subject, body
 
 
@@ -95,6 +107,11 @@ def standings_body(*, week_title: str, table_text: str, app_url: str) -> tuple[s
 
 def send_mail(to: str, subject: str, body: str) -> str:
     return get_sender().send(_message(to, subject, body))
+
+
+def send_invite(to: str, *, display_name: str | None = None) -> str:
+    subject, body = invite_body(display_name=display_name, app_url=Config.PUBLIC_APP_URL)
+    return send_mail(to, subject, body)
 
 
 def send_slate_published(to: str, *, week_title: str, lock_at: str) -> str:

@@ -2,7 +2,7 @@ from pathlib import Path
 
 from cfbsicko.db import connect
 from cfbsicko.import_sheet import import_master_sheet
-from cfbsicko.seed_csv import extract_sheet_to_csv, seed_from_csv
+from cfbsicko.seed_csv import extract_sheet_to_csv, games_exist, seed_from_csv
 
 XLSX = Path(__file__).resolve().parents[1] / "data" / "assets" / "CFB Locks MASTER SHEET 2026.xlsx"
 COMMITTED = Path(__file__).resolve().parents[1] / "seeds" / "2026" / "week-01"
@@ -50,8 +50,11 @@ def test_extract_and_seed_match_xlsx(tmp_path):
 
 
 def test_committed_week1_seed(tmp_path):
-    result = seed_from_csv(COMMITTED, tmp_path / "locks.db")
+    db = tmp_path / "locks.db"
+    assert games_exist(db) is False
+    result = seed_from_csv(COMMITTED, db)
     assert result.users == 12
     assert result.games >= 80
     assert result.picks == 50
     assert set(result.empty_players) == {"Mike", "Rick"}
+    assert games_exist(db) is True

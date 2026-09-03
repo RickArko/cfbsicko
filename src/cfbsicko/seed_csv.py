@@ -94,6 +94,14 @@ def extract_sheet_to_csv(xlsx_path: Path, out_dir: Path, *, season: int = 2026) 
     return out_dir
 
 
+def games_exist(db_path: Path) -> bool:
+    conn = connect(db_path)
+    try:
+        return int(conn.execute("SELECT COUNT(*) AS n FROM games").fetchone()["n"]) > 0
+    finally:
+        conn.close()
+
+
 def seed_from_csv(seed_dir: Path, db_path: Path) -> SeedResult:
     week = _read_csv(seed_dir / "week.csv")[0]
     games = _read_csv(seed_dir / "games.csv")

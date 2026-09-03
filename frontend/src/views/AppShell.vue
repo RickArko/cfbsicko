@@ -1,16 +1,27 @@
 <template>
   <div>
-    <header class="wrap row" style="justify-content: space-between">
-      <strong><router-link to="/app" style="color: inherit">CFB Sicko</router-link></strong>
-      <nav class="row muted">
-        <router-link to="/app">Picks</router-link>
-        <router-link to="/app/standings">Standings</router-link>
-        <router-link v-if="me?.is_commish" to="/app/admin">Admin</router-link>
-        <button v-if="token" class="ghost" type="button" @click="logout">Out</button>
+    <header class="site-header">
+      <nav class="site-nav wrap" aria-label="League">
+        <router-link class="brand" to="/app" aria-label="CFB Sicko picks">
+          <span class="brand-lead">CFB</span><span class="brand-rest"> Sicko</span>
+        </router-link>
+        <div class="nav-actions">
+          <template v-if="token && me">
+            <router-link to="/app">Picks</router-link>
+            <router-link to="/app/standings">Standings</router-link>
+            <router-link v-if="me.is_commish" to="/app/admin">Admin</router-link>
+          </template>
+          <button v-if="token" class="ghost" type="button" @click="logout">Out</button>
+        </div>
       </nav>
     </header>
     <SignIn v-if="!token && ready" @authed="refresh" />
-    <p v-else-if="error" class="wrap muted">{{ error }}</p>
+    <section v-else-if="error" class="wrap card auth-card">
+      <p class="eyebrow">Invite only</p>
+      <h2>Closed door</h2>
+      <p>{{ error }}</p>
+      <button class="ghost" type="button" @click="logout">Use a different email</button>
+    </section>
     <router-view v-else-if="token" :token="token" :me="me" />
   </div>
 </template>
@@ -37,7 +48,10 @@ async function refresh() {
   try {
     me.value = await api("/api/me", { token: token.value });
   } catch (exc) {
-    error.value = exc.status === 403 ? "You need an invite before you can see the league." : exc.message;
+    error.value =
+      exc.status === 403
+        ? "That email is not on this year’s list. Ask the commissioner."
+        : exc.message;
   }
   ready.value = true;
 }
@@ -46,6 +60,8 @@ async function logout() {
   await signOut();
   token.value = null;
   me.value = null;
+  error.value = "";
+  ready.value = true;
 }
 
 onMounted(() => {

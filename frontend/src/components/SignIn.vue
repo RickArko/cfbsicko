@@ -1,6 +1,7 @@
 <template>
-  <section class="wrap card">
-    <h2>Sign in</h2>
+  <section class="wrap card auth-card">
+    <p class="eyebrow">Invite only</p>
+    <h2>Enter the league</h2>
     <form v-if="localLogin" class="row" @submit.prevent="passwordLogin">
       <p class="muted" style="flex-basis: 100%">
         Temporary password login (test user). Turn this off once email codes work.
@@ -10,7 +11,7 @@
       <button type="submit" :disabled="busy">Sign in</button>
     </form>
     <p class="muted">
-      We email a 6-digit code. Type it here. Do not click the link if you use ProtonMail.
+      We email a 6-digit code. Type it here. If you use ProtonMail, do not tap the link.
     </p>
     <form v-if="!sent" class="row" @submit.prevent="send">
       <input v-if="!localLogin" v-model="email" type="email" required placeholder="you@school.edu" />
