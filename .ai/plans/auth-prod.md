@@ -89,11 +89,12 @@ Until this lands, “Send code” will 429 after two messages.
 
 ## Phase 4 — Proton-safe email template
 
-Supabase → Authentication → Email Templates → Magic Link (and Invite if you use it):
+Supabase → Authentication → Email Templates → Magic Link (and Invite if you use it).
+Paste [`docs/deployment/supabase-magic-link.html`](../../docs/deployment/supabase-magic-link.html).
 
 - Put the **6-digit `{{ .Token }}`** at the top in large type.
-- First sentence: “Type this code on the site. Do not click the button if you use ProtonMail.”
-- Keep the confirm URL below for Gmail/Apple users.
+- First sentence: “Type this on cfbsicko.com. Do not tap the button if you use ProtonMail.”
+- Keep `{{ .ConfirmationURL }}` below for Gmail/Apple users. Proton prefetches the link and burns it (`otp_expired`).
 
 The Vue client already calls `signInWithOtp` + `verifyOtp({ type: "email" })`. No app change required once mail arrives.
 

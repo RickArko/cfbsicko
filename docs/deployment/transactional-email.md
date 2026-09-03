@@ -41,8 +41,23 @@ From host must be `cfbsicko.com`. Delivery `smtp`.
 1. Supabase → Authentication → SMTP Settings. Enable custom SMTP.
 2. Sender name `CFB Sicko`, sender `locks@cfbsicko.com`, host `smtp.resend.com`, port `465`, user `resend`, password = same API key.
 3. Raise Auth emails/hour off the 2/hour default (300 is fine for twelve people).
-4. One password-reset / magic-link probe. Link host must be `https://cfbsicko.com`.
-5. Edit the Magic Link template so the 6-digit `{{ .Token }}` is first. ProtonMail consumes the link (`otp_expired`); users type the code.
+4. Proton-safe Magic Link template. Supabase → Authentication → Email Templates → Magic Link.
+   Subject: `Your CFB Sicko code`. Paste the HTML from
+   [`supabase-magic-link.html`](supabase-magic-link.html).
+   The 6-digit `{{ .Token }}` is first and large. Copy for the body if you
+   edit in the visual editor:
+
+   ```text
+   Your code: {{ .Token }}
+
+   Type this on cfbsicko.com. Do not tap the button if you use ProtonMail.
+   ```
+
+   Leave `{{ .ConfirmationURL }}` below for Gmail. ProtonMail prefetches the
+   confirm link and burns it (`otp_expired`). The app already wants the six
+   digits typed in. Repeat the same top-of-mail code block on Invite if you
+   use that template.
+5. One password-reset / magic-link probe. Link host must be `https://cfbsicko.com`.
 
 Until this is done, use `make fly.test-login` (see [auth-prod.md](../../.ai/plans/auth-prod.md)).
 
