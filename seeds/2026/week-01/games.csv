@@ -1,0 +1,92 @@
+sort_order,day_label,away,home,spread_home,total
+0,Thursday,Massachusetts,Rutgers,-29.5,51.5
+1,Thursday,Bethune-Cookman,UCF,-42.5,58.5
+2,Thursday,Merrimack,Delaware,-28.5,56.5
+3,Thursday,Akron,Wake Forest,-24.5,48.5
+4,Thursday,Albany,Buffalo,-18.5,48.5
+5,Thursday,West Georgia,Kennesaw State,-23.5,51.5
+6,Thursday,Colorado,Georgia Tech,-6.5,50.5
+7,Thursday,Arkansas-Pine Bluff,Missouri,-54.5,60.5
+8,Thursday,Eastern Illinois,Minnesota,-42.5,51.5
+9,Thursday,UAB,Illinois,-27.5,54.5
+10,Thursday,Idaho,Utah,-34.5,57.5
+11,Friday,San Jose State,Eastern Michigan,-2.5,56.5
+12,Friday,Indiana State,Purdue,-36.5,57.5
+13,Friday,North Carolina A&T,Georgia State,-28.5,63.5
+14,Friday,Toledo,Michigan State,-9.5,47.5
+15,Friday,Long Island,Kansas,-41.5,53.5
+16,Friday,UTEP,Oklahoma,-41.5,51.5
+17,Friday,Miami (FL),Stanford,24.5,47.5
+18,Friday,Fresno State,USC,-21.5,51.5
+19,Saturday,Bryant,Army,-37.5,50.5
+20,Saturday,Tarleton State,Bowling Green,-2.5,48.5
+21,Saturday,Miami (OH),Pittsburgh,-16.5,47.5
+22,Saturday,East Carolina,Alabama,-27.5,52.5
+23,Saturday,Oregon State,Houston,-20.5,49.5
+24,Saturday,New Hampshire,Syracuse,-34.5,56.5
+25,Saturday,Ohio,Nebraska,-23.5,46.5
+26,Saturday,Liberty,James Madison,-6.5,50.5
+27,Saturday,Coastal Carolina,West Virginia,-20.5,56.5
+28,Saturday,Lafayette,UConn,-18.5,57.5
+29,Saturday,North Texas,Indiana,-40.5,55.5
+30,Saturday,Ball State,Ohio State,-50.5,56.5
+31,Saturday,Kent State,South Carolina,-36.5,53.5
+32,Saturday,Duquesne,Air Force,-28.5,56.5
+33,Saturday,Youngstown State,Kentucky,-23.5,62.5
+34,Saturday,Southeast Missouri State,Iowa State,-30.5,52.5
+35,Saturday,Rhode Island,Temple,-14.5,51.5
+36,Saturday,Tennessee State,Georgia,-47.5,54.5
+37,Saturday,UTRGV,UTSA,-29.5,59.5
+38,Saturday,Fordham,North Dakota State,-38.5,56.5
+39,Saturday,Boise State,Oregon,-24.5,51.5
+40,Saturday,Furman,Tennessee,-48.5,66.5
+41,Saturday,Boston College,Cincinnati,-7.5,49.5
+42,Saturday,Towson,Navy,-31.5,52.5
+43,Saturday,The Citadel,Charlotte,-19.5,45.5
+44,Saturday,Marshall,Penn State,-24.5,52.5
+45,Saturday,Baylor,Auburn,-7.5,59.5
+46,Saturday,Texas State,Texas,-29.5,59.5
+47,Saturday,Maine,Appalachian State,-18.5,52.5
+48,Saturday,Tulane,Duke,-7.5,51.5
+49,Saturday,Oklahoma State,Tulsa,13.5,59.5
+50,Saturday,North Alabama,Arkansas,-40.5,62.5
+51,Saturday,Northern Illinois,Iowa,-31.5,44.5
+52,Saturday,Alcorn State,Southern Miss,-19.5,51.5
+53,Saturday,Norfolk State,Old Dominion,-40.5,52.5
+54,Saturday,Wyoming,Colorado State,-2.5,46.5
+55,Saturday,Charleston Southern,Georgia Southern,-26.5,51.5
+56,Saturday,Missouri State,Texas A&M,-40.5,53.5
+57,Saturday,Western Michigan,Michigan,-27.5,48.5
+58,Saturday,Sam Houston State,Troy,-16.5,53.5
+59,Saturday,FIU,South Florida,-13.5,51.5
+60,Saturday,Houston Christian,Rice,-22.5,47.5
+61,Saturday,Arkansas State,Memphis,-11.5,51.5
+62,Saturday,Southeast Louisiana,South Alabama,-13.5,52.5
+63,Saturday,Eastern Kentucky,Jacksonville State,-20.5,54.5
+64,Saturday,Nicholls State,Kansas State,-41.5,54.5
+65,Saturday,Idaho State,Utah State,-13.5,61.5
+66,Saturday,Austin Peay,Vanderbilt,-28.5,60.5
+67,Saturday,Murray State,Middle Tennessee,-20.5,59.5
+68,Saturday,Abilene Christian,Texas Tech,-42.5,58.5
+69,Saturday,Clemson,LSU,-10.5,50.5
+70,Saturday,VMI,Virginia Tech,-55.5,62.5
+71,Saturday,UL Monroe,Mississippi State,-28.5,54.5
+72,Saturday,Northwestern State,Louisiana Tech,-44.5,55.5
+73,Saturday,Florida Atlantic,Florida,-26.5,59.5
+74,Saturday,Lamar,Louisiana,-19.5,49.5
+75,Saturday,Hampton,Maryland,-45.5,57.5
+76,Saturday,Utah Tech,BYU,-51.5,61.5
+77,Saturday,South Dakota State,Northwestern,-13.5,46.5
+78,Saturday,Mercyhurst,New Mexico State,-28.5,51.5
+79,Saturday,Northern Arizona,Arizona,-32.5,57.5
+80,Saturday,Portland State,San Diego State,-39.5,62.5
+81,Saturday,Morgan State,Arizona State,-43.5,52.5
+82,Saturday,Central Michigan,New Mexico,-10.5,46.5
+83,Saturday,Mississippi Valley State,Sacramento State,-38.5,56.5
+84,Saturday,UNLV,Hawaii,3.5,56.5
+85,Saturday,UCLA,California,1.5,53.5
+86,Saturday,Western Kentucky,Nevada,2.5,52.5
+87,Sunday,Washington State,Washington,-23.5,50.5
+88,Sunday,Louisville,Ole Miss,-6.5,55.5
+89,Sunday,Wisconsin,Notre Dame,-20.5,46.5
+90,Monday,SMU,Florida State,3.5,53.5

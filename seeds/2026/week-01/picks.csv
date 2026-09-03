@@ -1,0 +1,51 @@
+display_name,slot,away,home,market,side,raw_text
+Stu,1,Indiana State,Purdue,total,under,Purdue/ISU Under 57.5
+Stu,2,SMU,Florida State,spread,away,SMU -3.5
+Stu,3,Youngstown State,Kentucky,spread,home,Kentucky -23.5
+Stu,4,Arkansas State,Memphis,spread,home,Memphis -11.5
+Stu,5,New Hampshire,Syracuse,spread,home,Syracuse -34.5
+Jack,1,Oregon State,Houston,spread,home,Houston -20.5
+Jack,2,UTEP,Oklahoma,spread,home,Oklahoma -41.5
+Jack,3,Boston College,Cincinnati,spread,away,BC +7.5
+Jack,4,Clemson,LSU,total,under,LSU/Clemson Under 50.5
+Jack,5,UCLA,California,total,over,UCLA/Cal Over 53.5
+Billy,1,Toledo,Michigan State,spread,home,MSU -9.5
+Billy,2,Northern Illinois,Iowa,spread,away,Northern Illinois +31.5
+Billy,3,VMI,Virginia Tech,spread,away,VMI +55.5
+Billy,4,Ball State,Ohio State,total,over,OSU/Ball State Over 56.5
+Billy,5,Wisconsin,Notre Dame,spread,home,ND -20.5
+Wil,1,Akron,Wake Forest,total,under,Akron/Wake Under 48.5
+Wil,2,Louisville,Ole Miss,total,under,Ole Miss/Louisville Under 55.5
+Wil,3,Toledo,Michigan State,total,under,Toledo/MSU Under 47.5
+Wil,4,East Carolina,Alabama,spread,home,Alabama -27.5
+Wil,5,UCLA,California,spread,home,Cal +1.5
+Scout,1,Colorado,Georgia Tech,spread,home,Georgia Tech -6.5
+Scout,2,Indiana State,Purdue,total,under,PUR/ISU Under 57.5
+Scout,3,Wisconsin,Notre Dame,spread,home,ND -20.5
+Scout,4,UAB,Illinois,total,over,ILL/UAB Over 57.5
+Scout,5,Ball State,Ohio State,total,over,Ball State/Ohio State Over 56.5
+Kenny,1,Colorado,Georgia Tech,spread,home,Georgia Tech -6.5
+Kenny,2,Idaho,Utah,total,under,Idaho/Utah Under 57.5
+Kenny,3,Fresno State,USC,total,over,Fresno State/USC Over 51.5
+Kenny,4,Youngstown State,Kentucky,spread,home,Kentucky -23.5
+Kenny,5,SMU,Florida State,spread,away,SMU -3.5
+Owen,1,Colorado,Georgia Tech,spread,home,Georgia Tech -6.5
+Owen,2,Clemson,LSU,spread,home,LSU -10.5
+Owen,3,Ball State,Ohio State,spread,home,Ohio State -50.5
+Owen,4,Ohio,Nebraska,spread,away,Ohio +23.5
+Owen,5,North Alabama,Arkansas,spread,away,North Alabama +40.5
+Luke,1,Fresno State,USC,spread,home,USC -21.5
+Luke,2,Toledo,Michigan State,spread,away,Toledo +9.5
+Luke,3,Clemson,LSU,spread,home,LSU -10.5
+Luke,4,Texas State,Texas,spread,home,Texas -29.5
+Luke,5,Ball State,Ohio State,spread,home,Ohio State -50.5
+Joe,1,Washington State,Washington,spread,away,Washington State +23.5
+Joe,2,Colorado,Georgia Tech,spread,home,Georgia Tech -6.5
+Joe,3,East Carolina,Alabama,spread,away,ECU +27.5
+Joe,4,Boston College,Cincinnati,spread,home,Cincinnati -7.5
+Joe,5,Wisconsin,Notre Dame,spread,home,Notre Dame -20.5
+Rob,1,North Texas,Indiana,spread,away,North Texas +40.5
+Rob,2,Wisconsin,Notre Dame,spread,away,Wisconsin +20.5
+Rob,3,UCLA,California,spread,away,UCLA -1.5
+Rob,4,Clemson,LSU,spread,away,Clemson +10.5
+Rob,5,Coastal Carolina,West Virginia,spread,home,West Virginia -20.5

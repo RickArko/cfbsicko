@@ -7,8 +7,10 @@ Private college-football locks league for [cfbsicko.com](https://cfbsicko.com). 
 ```bash
 make bootstrap
 make test
-# Import Week 1 from the exported sheet (uses ~/.cfbsicko/locks.db):
-uv run cfbsicko import-sheet "data/assets/CFB Locks MASTER SHEET 2026.xlsx"
+# Week 1 CSVs (what Fly uses). xlsx stays on the laptop:
+make seed-csv
+# Optional: rebuild CSVs from a local sheet export
+# make extract-sheet
 make run
 ```
 

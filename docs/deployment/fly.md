@@ -24,6 +24,7 @@ make fly.deploy
 make fly.status
 make fly.logs
 make fly.certs
+make fly.seed-csv
 make fly.db-backup
 ```
 

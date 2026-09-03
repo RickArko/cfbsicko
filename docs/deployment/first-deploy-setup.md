@@ -44,10 +44,18 @@ make supabase.check
 make run
 ```
 
-Import Week 1 after the schema exists:
+Import Week 1 after the schema exists. Prefer the committed CSVs (no xlsx on Fly):
 
 ```bash
-make import-sheet
+make seed-csv
+# laptop only, if the sheet changed:
+# make extract-sheet
+```
+
+On Fly, after a deploy that includes `cfbsicko seed-csv`:
+
+```bash
+make fly.seed-csv
 ```
 
 ## 3. Fly — one-time
