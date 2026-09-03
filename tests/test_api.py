@@ -132,6 +132,27 @@ def test_grade_override_standings_and_snapshot(client, commish_headers):
     assert "picks" in body.json()
 
 
+def test_invite_sends_welcome_mail(client, commish_headers, app):
+    sent: list[tuple] = []
+
+    def capture(to, subject, body):
+        sent.append((to, subject, body))
+        return "smtp"
+
+    app.state.mail_send = capture
+    r = client.post(
+        "/api/admin/invites",
+        json={"email": "stu@example.com", "display_name": "Stu"},
+        headers=commish_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["mailed"] is True
+    assert len(sent) == 1
+    assert sent[0][0] == "stu@example.com"
+    assert "You're in" in sent[0][1]
+    assert "Lock your five" in sent[0][2]
+
+
 def test_publish_slate_and_mail(client, commish_headers, app):
     sent: list[tuple] = []
 

@@ -15,13 +15,16 @@
         </div>
       </nav>
     </header>
-    <SignIn v-if="!token && ready" @authed="refresh" />
-    <section v-else-if="error" class="wrap card auth-card">
+    <section v-if="denied" class="wrap card auth-card">
       <p class="eyebrow">Invite only</p>
       <h2>Closed door</h2>
-      <p>{{ error }}</p>
+      <p>{{ denied }}</p>
       <button class="ghost" type="button" @click="logout">Use a different email</button>
     </section>
+    <template v-else-if="!token && ready">
+      <p v-if="hashNote" class="wrap muted">{{ hashNote }}</p>
+      <SignIn @authed="refresh" />
+    </template>
     <router-view v-else-if="token" :token="token" :me="me" />
   </div>
 </template>
@@ -35,10 +38,11 @@ import { getToken, hashAuthError, signOut } from "../session.js";
 const token = ref(null);
 const me = ref(null);
 const ready = ref(false);
-const error = ref("");
+const denied = ref("");
+const hashNote = ref("");
 
 async function refresh() {
-  error.value = "";
+  denied.value = "";
   token.value = await getToken();
   if (!token.value) {
     me.value = null;
@@ -48,7 +52,7 @@ async function refresh() {
   try {
     me.value = await api("/api/me", { token: token.value });
   } catch (exc) {
-    error.value =
+    denied.value =
       exc.status === 403
         ? "That email is not on this year’s list. Ask the commissioner."
         : exc.message;
@@ -60,16 +64,16 @@ async function logout() {
   await signOut();
   token.value = null;
   me.value = null;
-  error.value = "";
+  denied.value = "";
   ready.value = true;
 }
 
-onMounted(() => {
+onMounted(async () => {
   const fromHash = hashAuthError();
   if (fromHash) {
-    error.value = fromHash;
+    hashNote.value = fromHash;
     history.replaceState(null, "", window.location.pathname);
   }
-  refresh();
+  await refresh();
 });
 </script>

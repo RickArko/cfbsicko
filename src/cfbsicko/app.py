@@ -444,6 +444,35 @@ def create_app(
         if assets.is_dir():
             app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
+        def _dist_file(name: str) -> Path | None:
+            path = (frontend / name).resolve()
+            try:
+                path.relative_to(frontend.resolve())
+            except ValueError:
+                return None
+            return path if path.is_file() else None
+
+        @app.get("/favicon.svg")
+        def favicon_svg():
+            path = _dist_file("favicon.svg")
+            if path is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            return FileResponse(path)
+
+        @app.get("/og.png")
+        def og_png():
+            path = _dist_file("og.png")
+            if path is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            return FileResponse(path)
+
+        @app.get("/og.svg")
+        def og_svg():
+            path = _dist_file("og.svg")
+            if path is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            return FileResponse(path)
+
         @app.get("/")
         def landing():
             return FileResponse(frontend / "index.html")

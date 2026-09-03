@@ -1,5 +1,5 @@
 <template>
-  <div class="landing">
+  <div v-if="!forwarding" class="landing">
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
       <nav class="site-nav wrap" aria-label="Main">
@@ -126,11 +126,12 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted } from "vue";
+import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { getToken } from "../session.js";
 
 const router = useRouter();
+const forwarding = ref(true);
 let observer;
 
 onMounted(async () => {
@@ -143,6 +144,8 @@ onMounted(async () => {
   } catch {
     /* show landing if auth config is down */
   }
+  forwarding.value = false;
+  await nextTick();
 
   const nodes = document.querySelectorAll(".landing .reveal");
   if (!nodes.length) return;

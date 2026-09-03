@@ -1,7 +1,9 @@
 from email.message import EmailMessage
 
 from cfbsicko.mail import (
+    invite_body,
     lock_reminder_body,
+    send_invite,
     send_lock_reminder,
     send_slate_published,
     send_standings,
@@ -28,20 +30,29 @@ def test_templates_and_mocked_send():
             week_title="Week 1", lock_at="Thu 6pm", app_url="https://cfbsicko.com"
         )
         assert "five picks" in sub.lower() or "picks" in body.lower()
+        assert "Lock your five" in body
+        assert "sheet" not in body.lower()
+        inv_s, inv_b = invite_body(display_name="Stu", app_url="https://cfbsicko.com")
+        assert "You're in" in inv_s
+        assert "Lock your five" in inv_b
+        assert "https://cfbsicko.com/app" in inv_b
         _rem_s, rem_b = lock_reminder_body(
             week_title="Week 1", lock_at="Thu 6pm", have=2, app_url="https://cfbsicko.com"
         )
         assert "2/5" in rem_b
+        assert "Lock your five" in rem_b
         _st_s, st_b = standings_body(
             week_title="Week 1", table_text="1. Stu  4-0-1", app_url="https://cfbsicko.com"
         )
         assert "4-0-1" in st_b
 
+        assert send_invite("a@example.com", display_name="Stu") == "smtp"
         assert send_slate_published("a@example.com", week_title="Week 1", lock_at="Thu 6pm") == "smtp"
         assert send_lock_reminder("a@example.com", week_title="Week 1", lock_at="Thu 6pm", have=1) == "smtp"
         assert send_standings("a@example.com", week_title="Week 1", table_text="1. Stu") == "smtp"
-        assert len(sender.messages) == 3
+        assert len(sender.messages) == 4
         assert sender.messages[0]["To"] == "a@example.com"
-        assert "Week 1" in sender.messages[0]["Subject"]
+        assert "You're in" in sender.messages[0]["Subject"]
+        assert "Week 1" in sender.messages[1]["Subject"]
     finally:
         set_sender_factory(None)

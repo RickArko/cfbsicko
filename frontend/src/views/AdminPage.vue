@@ -88,12 +88,14 @@ async function load() {
 }
 
 async function invite() {
-  await api("/api/admin/invites", {
+  const r = await api("/api/admin/invites", {
     method: "POST",
     token: props.token,
     body: { email: invEmail.value, display_name: invName.value || null },
   });
-  note.value = `Invited ${invEmail.value}`;
+  note.value = r.mailed
+    ? `Invited ${invEmail.value} — welcome mail sent.`
+    : `Invited ${invEmail.value} (mail did not send).`;
   invEmail.value = "";
 }
 
