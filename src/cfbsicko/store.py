@@ -610,17 +610,23 @@ def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> dict[str, Any]:
     }
 
 
-def users_missing_picks(conn: sqlite3.Connection, week_id: int) -> list[dict[str, Any]]:
+def users_missing_picks(
+    conn: sqlite3.Connection, week_id: int, *, league_id: int | None = None
+) -> list[dict[str, Any]]:
+    from cfbsicko.leagues import default_league_id
+
+    league_id = league_id or default_league_id(conn)
     rows = conn.execute(
         """
         SELECT u.id, u.display_name, u.email, COUNT(p.id) AS n
         FROM users u
+        JOIN league_members m ON m.user_id = u.id AND m.league_id = ?
         LEFT JOIN picks p ON p.user_id = u.id AND p.week_id = ?
         GROUP BY u.id
         HAVING n < 5
         ORDER BY u.display_name
         """,
-        (week_id,),
+        (league_id, week_id),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -644,5 +650,24 @@ def list_users(conn: sqlite3.Connection, *, league_id: int | None = None) -> lis
     ]
 
 
-def list_invited_emails(conn: sqlite3.Connection) -> list[str]:
-    return [r["email"] for r in conn.execute("SELECT email FROM users WHERE email IS NOT NULL")]
+def list_invited_emails(conn: sqlite3.Connection, *, league_id: int | None = None) -> list[str]:
+    from cfbsicko.leagues import default_league_id
+
+    league_id = league_id or default_league_id(conn)
+    rows = conn.execute(
+        """
+        SELECT email FROM (
+            SELECT u.email AS email
+            FROM users u
+            JOIN league_members m ON m.user_id = u.id
+            WHERE m.league_id = ? AND u.email IS NOT NULL
+            UNION
+            SELECT i.email
+            FROM invites i
+            WHERE i.email IS NOT NULL AND COALESCE(i.league_id, ?) = ?
+        )
+        ORDER BY email
+        """,
+        (league_id, default_league_id(conn), league_id),
+    )
+    return [r["email"] for r in rows]

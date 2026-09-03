@@ -237,7 +237,7 @@ def _assert_raw_matches_frozen(raw: str, market: str, side: str, game: dict[str,
     written = _line_from_raw(raw)
     if written is None:
         return
-    if abs(abs(written) - abs(listed)) > 0.05:
+    if abs(written - listed) > 0.05:
         raise ValueError(
             f"raw_text {raw!r} does not match frozen line {listed:g} ({game['away']} at {game['home']})"
         )
@@ -271,7 +271,7 @@ def _frozen_raw_text(raw: str, market: str, side: str, game: SlateGame) -> str:
         written = float(str(raw).rsplit(" ", 1)[-1])
     except ValueError:
         written = None
-    if written is not None and abs(abs(written) - abs(listed)) <= 0.05:
+    if written is not None and abs(written - listed) <= 0.05:
         return raw
     team = home if side == "home" else away
     return f"{team} {listed:+g}"

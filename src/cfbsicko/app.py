@@ -434,12 +434,17 @@ def create_app(
     ):
         from cfbsicko.mail import invite_body
 
+        target_id = int(league["id"]) if body.league_id is None else body.league_id
+        try:
+            get_league(db(), target_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="League not found") from exc
         invite = create_invite(
             db(),
             email=body.email,
             display_name=body.display_name,
             invited_by=user["id"],
-            league_id=body.league_id or int(league["id"]),
+            league_id=target_id,
         )
         subject, text = invite_body(
             display_name=invite["display_name"],
@@ -541,7 +546,11 @@ def create_app(
         return send_mail(to, subject, body)
 
     @app.post("/api/admin/weeks/{week_no}/mail/slate")
-    def admin_mail_slate(week_no: int, user: dict[str, Any] = Depends(commish)):
+    def admin_mail_slate(
+        week_no: int,
+        user: dict[str, Any] = Depends(commish),
+        league: dict[str, Any] = Depends(active_league),
+    ):
         from cfbsicko.mail import slate_published_body
 
         week = get_week(db(), week_no)
@@ -549,17 +558,21 @@ def create_app(
             week_title=week["title"], lock_at=week["lock_at"], app_url=Config.PUBLIC_APP_URL
         )
         sent = []
-        for email in list_invited_emails(db()):
+        for email in list_invited_emails(db(), league_id=int(league["id"])):
             sent.append({"to": email, "delivery": _mail(email, subject, body)})
         return {"sent": len(sent)}
 
     @app.post("/api/admin/weeks/{week_no}/mail/reminder")
-    def admin_mail_reminder(week_no: int, user: dict[str, Any] = Depends(commish)):
+    def admin_mail_reminder(
+        week_no: int,
+        user: dict[str, Any] = Depends(commish),
+        league: dict[str, Any] = Depends(active_league),
+    ):
         from cfbsicko.mail import lock_reminder_body
 
         week = get_week(db(), week_no)
         sent = 0
-        for row in users_missing_picks(db(), week["id"]):
+        for row in users_missing_picks(db(), week["id"], league_id=int(league["id"])):
             if not row["email"]:
                 continue
             subject, body = lock_reminder_body(
@@ -573,17 +586,21 @@ def create_app(
         return {"sent": sent}
 
     @app.post("/api/admin/weeks/{week_no}/mail/standings")
-    def admin_mail_standings(week_no: int, user: dict[str, Any] = Depends(commish)):
+    def admin_mail_standings(
+        week_no: int,
+        user: dict[str, Any] = Depends(commish),
+        league: dict[str, Any] = Depends(active_league),
+    ):
         from cfbsicko.mail import standings_body
 
         week = get_week(db(), week_no)
-        table = standings(db())
+        table = standings(db(), league_id=int(league["id"]))
         lines = [f"{row['rank']}. {row['display_name']}  {row['record']}" for row in table["table"]]
         subject, body = standings_body(
             week_title=week["title"], table_text="\n".join(lines), app_url=Config.PUBLIC_APP_URL
         )
         sent = 0
-        for email in list_invited_emails(db()):
+        for email in list_invited_emails(db(), league_id=int(league["id"])):
             _mail(email, subject, body)
             sent += 1
         return {"sent": sent}

@@ -10,6 +10,7 @@
             <select
               v-if="me.leagues && me.leagues.length"
               class="league-switch"
+              aria-label="Active league"
               :value="leagueId || me.league?.id"
               @change="switchLeague"
             >
@@ -70,6 +71,24 @@ async function refresh() {
       setLeagueId(leagueId.value);
     }
   } catch (exc) {
+    if (exc.status === 403 && getLeagueId()) {
+      setLeagueId(null);
+      leagueId.value = null;
+      try {
+        me.value = await api("/api/me", { token: token.value });
+        if (me.value.league?.id) {
+          leagueId.value = me.value.league.id;
+          setLeagueId(leagueId.value);
+        }
+        return;
+      } catch (retry) {
+        denied.value =
+          retry.status === 403
+            ? "That email is not on this year’s list. Ask the commissioner."
+            : retry.message;
+        return;
+      }
+    }
     denied.value =
       exc.status === 403
         ? "That email is not on this year’s list. Ask the commissioner."
@@ -85,6 +104,8 @@ function switchLeague(event) {
 
 async function logout() {
   await signOut();
+  setLeagueId(null);
+  leagueId.value = null;
   token.value = null;
   me.value = null;
   denied.value = "";

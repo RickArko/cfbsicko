@@ -120,3 +120,30 @@ def test_extract_does_not_write_on_unmapped(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="Unmapped"):
         extract_sheet_to_csv(XLSX, out, season=2026)
     assert marker.read_text(encoding="utf-8") == "stale\n"
+
+
+def test_opposite_signed_spread_does_not_match_frozen():
+    from cfbsicko.parse import SlateGame
+    from cfbsicko.seed_csv import _assert_raw_matches_frozen, _frozen_raw_text
+
+    game = {
+        "away": "SMU",
+        "home": "Florida State",
+        "spread_home": "-3.5",
+        "total": "53.5",
+    }
+    with pytest.raises(ValueError, match="does not match"):
+        _assert_raw_matches_frozen("Florida State +3.5", "spread", "home", game)
+    _assert_raw_matches_frozen("Florida State -3.5", "spread", "home", game)
+
+    slate = SlateGame(
+        away="SMU",
+        home="Florida State",
+        favorite="Florida State",
+        spread=-3.5,
+        total=53.5,
+        day_label="Friday",
+    )
+    assert slate.spread_home == -3.5
+    assert _frozen_raw_text("Florida State +3.5", "spread", "home", slate) == "Florida State -3.5"
+    assert _frozen_raw_text("Florida State -3.5", "spread", "home", slate) == "Florida State -3.5"

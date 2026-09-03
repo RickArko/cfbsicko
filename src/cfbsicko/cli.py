@@ -133,7 +133,11 @@ def main(argv: list[str] | None = None) -> int:
         from cfbsicko.mail import group_invite_body, group_invite_review_body, send_mail
         from cfbsicko.trial_roster import trial_emails
 
-        recipients = trial_emails()
+        try:
+            recipients = trial_emails()
+        except RuntimeError as exc:
+            print(exc, file=sys.stderr)
+            return 2
         commish = (args.to or recipients[0]).strip().lower()
         app_url = Config.PUBLIC_APP_URL
         if "127.0.0.1" in app_url or "localhost" in app_url:
@@ -157,8 +161,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.blast:
             subject, body = group_invite_body(app_url=app_url)
+            bcc = [email for email in recipients if email != commish]
             try:
-                send_mail(recipients, subject, body)
+                send_mail(commish, subject, body, bcc=bcc)
             except RuntimeError as exc:
                 print(exc, file=sys.stderr)
                 return 2

@@ -88,6 +88,9 @@ fi
 if [[ -n "${COMMISH_ALLOWED_EMAILS:-}" ]]; then
   args+=(COMMISH_ALLOWED_EMAILS="${COMMISH_ALLOWED_EMAILS}")
 fi
+if [[ -n "${CFBSICKO_TRIAL_ROSTER:-}" ]]; then
+  args+=(CFBSICKO_TRIAL_ROSTER="${CFBSICKO_TRIAL_ROSTER}")
+fi
 if [[ -n "${SMTP_HOST:-}" && -n "${SMTP_FROM:-}" ]]; then
   args+=(
     SMTP_HOST="${SMTP_HOST}"

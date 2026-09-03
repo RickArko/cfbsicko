@@ -153,6 +153,27 @@ def slugify(name: str) -> str:
     return slug or "league"
 
 
+def _validated_league_settings(
+    *,
+    name: str,
+    buy_in: int,
+    pot_first: float,
+    pot_second: float,
+    pot_third: float,
+    bottom_n: int,
+) -> tuple[str, int, float, float, float, int]:
+    name = name.strip()
+    if not name:
+        raise ValueError("league name is required")
+    if buy_in < 1:
+        raise ValueError("buy_in must be at least 1")
+    if abs((pot_first + pot_second + pot_third) - 1.0) > 0.001:
+        raise ValueError("payout shares must sum to 1")
+    if bottom_n < 0:
+        raise ValueError("bottom_n must be >= 0")
+    return name, buy_in, pot_first, pot_second, pot_third, bottom_n
+
+
 def create_league(
     conn: sqlite3.Connection,
     *,
@@ -166,15 +187,14 @@ def create_league(
     bottom_n: int = 3,
     season: int | None = None,
 ) -> dict[str, Any]:
-    name = name.strip()
-    if not name:
-        raise ValueError("league name is required")
-    if buy_in < 1:
-        raise ValueError("buy_in must be at least 1")
-    if abs((pot_first + pot_second + pot_third) - 1.0) > 0.001:
-        raise ValueError("payout shares must sum to 1")
-    if bottom_n < 0:
-        raise ValueError("bottom_n must be >= 0")
+    name, buy_in, pot_first, pot_second, pot_third, bottom_n = _validated_league_settings(
+        name=name,
+        buy_in=buy_in,
+        pot_first=pot_first,
+        pot_second=pot_second,
+        pot_third=pot_third,
+        bottom_n=bottom_n,
+    )
     season = season or Config.SEASON
     base = slugify(name)
     slug = base
@@ -214,15 +234,15 @@ def update_league(
     bottom_n: int | None = None,
 ) -> dict[str, Any]:
     current = get_league(conn, league_id)
-    name = name.strip() if name is not None else current["name"]
-    buy_in = current["buy_in"] if buy_in is None else buy_in
-    pot_first = current["pot_first"] if pot_first is None else pot_first
-    pot_second = current["pot_second"] if pot_second is None else pot_second
-    pot_third = current["pot_third"] if pot_third is None else pot_third
+    name, buy_in, pot_first, pot_second, pot_third, bottom_n = _validated_league_settings(
+        name=current["name"] if name is None else name,
+        buy_in=current["buy_in"] if buy_in is None else buy_in,
+        pot_first=current["pot_first"] if pot_first is None else pot_first,
+        pot_second=current["pot_second"] if pot_second is None else pot_second,
+        pot_third=current["pot_third"] if pot_third is None else pot_third,
+        bottom_n=current["bottom_n"] if bottom_n is None else bottom_n,
+    )
     extra_owed = current["extra_owed"] if extra_owed is None else extra_owed
-    bottom_n = current["bottom_n"] if bottom_n is None else bottom_n
-    if abs((pot_first + pot_second + pot_third) - 1.0) > 0.001:
-        raise ValueError("payout shares must sum to 1")
     conn.execute(
         """
         UPDATE leagues SET name = ?, buy_in = ?, pot_first = ?, pot_second = ?, pot_third = ?,
