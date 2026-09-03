@@ -51,6 +51,11 @@ def set_sender_factory(factory: Callable[[], MailSender] | None) -> None:
 def get_sender() -> MailSender:
     if _sender_factory is not None:
         return _sender_factory()
+    if not Config.SMTP_PASSWORD:
+        raise RuntimeError(
+            "SMTP_PASSWORD is empty. Set the Resend API key in .env, or send from Fly "
+            "where that secret already lives (fly ssh console -C 'cfbsicko invite-group --review')."
+        )
     return SmtpSender(
         host=Config.SMTP_HOST,
         port=Config.SMTP_PORT,
