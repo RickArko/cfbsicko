@@ -19,7 +19,7 @@
 import { onMounted, ref } from "vue";
 import SignIn from "../components/SignIn.vue";
 import { api } from "../api.js";
-import { getToken, signOut } from "../session.js";
+import { getToken, hashAuthError, signOut } from "../session.js";
 
 const token = ref(null);
 const me = ref(null);
@@ -48,5 +48,12 @@ async function logout() {
   me.value = null;
 }
 
-onMounted(refresh);
+onMounted(() => {
+  const fromHash = hashAuthError();
+  if (fromHash) {
+    error.value = fromHash;
+    history.replaceState(null, "", window.location.pathname);
+  }
+  refresh();
+});
 </script>
