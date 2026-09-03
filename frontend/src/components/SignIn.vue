@@ -1,33 +1,61 @@
 <template>
   <section class="wrap card">
     <h2>Sign in</h2>
-    <p class="muted">
-      We email a 6-digit code. Type it here. Do not click the link in the email — Proton and some
-      scanners burn it.
-    </p>
-    <form v-if="!sent" class="row" @submit.prevent="send">
-      <input v-model="email" type="email" required placeholder="you@school.edu" />
-      <button type="submit" :disabled="busy">Send code</button>
+    <form v-if="localLogin" class="row" @submit.prevent="passwordLogin">
+      <p class="muted" style="flex-basis: 100%">Local test login. Not used on cfbsicko.com.</p>
+      <input v-model="email" type="email" required />
+      <input v-model="password" type="password" required placeholder="password" />
+      <button type="submit" :disabled="busy">Sign in</button>
     </form>
-    <form v-else class="row" @submit.prevent="confirm">
-      <input v-model="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="123456" />
-      <button type="submit" :disabled="busy || code.trim().length < 6">Enter</button>
-      <button class="ghost" type="button" :disabled="busy" @click="sent = false">Resend</button>
-    </form>
+    <template v-else>
+      <p class="muted">
+        We email a 6-digit code. Type it here. Do not click the link if you use ProtonMail.
+      </p>
+      <form v-if="!sent" class="row" @submit.prevent="send">
+        <input v-model="email" type="email" required placeholder="you@school.edu" />
+        <button type="submit" :disabled="busy">Send code</button>
+      </form>
+      <form v-else class="row" @submit.prevent="confirm">
+        <input v-model="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="123456" />
+        <button type="submit" :disabled="busy || code.trim().length < 6">Enter</button>
+        <button class="ghost" type="button" :disabled="busy" @click="sent = false">Resend</button>
+      </form>
+    </template>
     <p v-if="note" class="muted">{{ note }}</p>
   </section>
 </template>
 
 <script setup>
-import { ref } from "vue";
-import { signIn, verifyEmailCode } from "../session.js";
+import { onMounted, ref } from "vue";
+import { loadConfig, localPasswordLogin, signIn, verifyEmailCode } from "../session.js";
 
 const emit = defineEmits(["authed"]);
 const email = ref("");
+const password = ref("");
 const code = ref("");
 const sent = ref(false);
 const busy = ref(false);
 const note = ref("");
+const localLogin = ref(false);
+
+onMounted(async () => {
+  const cfg = await loadConfig();
+  localLogin.value = Boolean(cfg.local_login);
+  if (cfg.test_email) email.value = cfg.test_email;
+});
+
+async function passwordLogin() {
+  busy.value = true;
+  note.value = "";
+  try {
+    await localPasswordLogin(email.value, password.value);
+    emit("authed");
+  } catch (exc) {
+    note.value = exc.message || String(exc);
+  } finally {
+    busy.value = false;
+  }
+}
 
 async function send() {
   busy.value = true;

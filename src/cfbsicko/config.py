@@ -55,6 +55,9 @@ class Config:
         "yes",
         "on",
     }
+    TEST_EMAIL: str = (os.getenv("TEST_EMAIL") or "rickarko@pm.me").strip().lower()
+    TEST_PASS: str = os.getenv("TEST_PASS") or ""
+    TEST_DISPLAY_NAME: str = os.getenv("TEST_DISPLAY_NAME") or "Rick"
 
     @classmethod
     def database_path(cls) -> Path:
@@ -75,7 +78,21 @@ class Config:
         emails = [part.strip().lower() for part in cls.COMMISH_ALLOWED_EMAILS.split(",") if part.strip()]
         if "*" in emails:
             raise RuntimeError("COMMISH_ALLOWED_EMAILS must never be *")
+        if cls.local_login_enabled() and cls.TEST_EMAIL and cls.TEST_EMAIL not in emails:
+            emails.append(cls.TEST_EMAIL)
         return emails
+
+    @classmethod
+    def local_login_enabled(cls) -> bool:
+        """Password test user. Never on cfbsicko.com / Fly."""
+        if not cls.TEST_PASS:
+            return False
+        public = cls.PUBLIC_APP_URL.lower()
+        if "cfbsicko.com" in public or "fly.dev" in public:
+            return False
+        if cls.HOST in {"127.0.0.1", "localhost"}:
+            return True
+        return "127.0.0.1" in public or "localhost" in public
 
 
 def reload_config() -> None:
@@ -110,3 +127,6 @@ def reload_config() -> None:
     Config.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") or ""
     Config.SMTP_FROM = os.getenv("SMTP_FROM") or "CFB Sicko <locks@cfbsicko.com>"
     Config.SEASON = int(os.getenv("CFBSICKO_SEASON") or "2026")
+    Config.TEST_EMAIL = (os.getenv("TEST_EMAIL") or "rickarko@pm.me").strip().lower()
+    Config.TEST_PASS = os.getenv("TEST_PASS") or ""
+    Config.TEST_DISPLAY_NAME = os.getenv("TEST_DISPLAY_NAME") or "Rick"

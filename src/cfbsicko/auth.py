@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -11,6 +13,8 @@ import requests
 from fastapi import Depends, Header, HTTPException
 
 from cfbsicko.config import Config
+
+LOCAL_ISS = "cfbsicko-local"
 
 logger = logging.getLogger(__name__)
 
@@ -157,17 +161,70 @@ def bearer_token(authorization: str | None = Header(default=None)) -> str:
     return authorization.split(" ", 1)[1].strip()
 
 
-def get_verifier() -> SupabaseTokenVerifier:
+def local_jwt_secret() -> str:
+    return f"cfbsicko-local-test|{Config.TEST_PASS}".ljust(32, ".")
+
+
+def mint_local_token(email: str) -> str:
+    now = datetime.now(UTC)
+    return jwt.encode(
+        {
+            "sub": f"local:{email}",
+            "email": email,
+            "role": "authenticated",
+            "aud": "authenticated",
+            "iss": LOCAL_ISS,
+            "iat": now,
+            "exp": now + timedelta(days=7),
+            "email_verified": True,
+        },
+        local_jwt_secret(),
+        algorithm="HS256",
+    )
+
+
+def verify_local_token(token: str) -> AuthenticatedUser | None:
+    if not Config.local_login_enabled():
+        return None
+    try:
+        claims = jwt.decode(
+            token,
+            local_jwt_secret(),
+            algorithms=["HS256"],
+            audience="authenticated",
+            issuer=LOCAL_ISS,
+        )
+    except jwt.PyJWTError:
+        return None
+    email = str(claims.get("email") or "").strip().lower()
+    if email != Config.TEST_EMAIL:
+        return None
+    return AuthenticatedUser(
+        user_id=str(claims.get("sub") or ""),
+        email=email,
+        role="authenticated",
+        email_confirmed=True,
+        claims=claims,
+    )
+
+
+def check_local_password(email: str, password: str) -> bool:
+    if not Config.local_login_enabled():
+        return False
+    if email.strip().lower() != Config.TEST_EMAIL:
+        return False
+    if len(password) != len(Config.TEST_PASS):
+        return False
+    return hmac.compare_digest(password, Config.TEST_PASS)
+
+
+def get_auth_user(token: str = Depends(bearer_token)) -> AuthenticatedUser:
+    local = verify_local_token(token)
+    if local is not None:
+        return local
     verifier = build_token_verifier()
     if verifier is None:
-        raise HTTPException(status_code=503, detail="Auth is not configured")
-    return verifier
-
-
-def get_auth_user(
-    token: str = Depends(bearer_token),
-    verifier: SupabaseTokenVerifier = Depends(get_verifier),
-) -> AuthenticatedUser:
+        raise HTTPException(status_code=401, detail="Invalid bearer token")
     try:
         user = verifier.verify_access_token(token)
     except TokenVerificationError as exc:

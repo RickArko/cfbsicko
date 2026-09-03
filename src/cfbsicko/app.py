@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from cfbsicko.auth import AuthenticatedUser, get_auth_user
+from cfbsicko.auth import AuthenticatedUser, check_local_password, get_auth_user, mint_local_token
 from cfbsicko.config import Config
 from cfbsicko.db import connect
 from cfbsicko.rate_limit import RateLimiter
@@ -89,6 +89,11 @@ class OverrideIn(BaseModel):
 
 class PaidIn(BaseModel):
     buy_in_paid: bool
+
+
+class LocalLoginIn(BaseModel):
+    email: str
+    password: str
 
 
 def _now_utc() -> datetime:
@@ -169,7 +174,29 @@ def create_app(
             "supabase_anon_key": Config.supabase_browser_key() or None,
             "public_app_url": Config.PUBLIC_APP_URL,
             "auth_enabled": Config.WEB_AUTH_ENABLED,
+            "local_login": Config.local_login_enabled(),
+            "test_email": Config.TEST_EMAIL if Config.local_login_enabled() else None,
         }
+
+    @app.post("/api/auth/dev-login")
+    def dev_login(body: LocalLoginIn):
+        if not Config.local_login_enabled():
+            raise HTTPException(status_code=404, detail="Local login is off")
+        if not check_local_password(body.email, body.password):
+            raise HTTPException(status_code=401, detail="Bad email or password")
+        email = Config.TEST_EMAIL
+        create_invite(db(), email=email, display_name=Config.TEST_DISPLAY_NAME, invited_by=None)
+        upsert_invited_user(
+            db(),
+            AuthenticatedUser(
+                user_id=f"local:{email}",
+                email=email,
+                role="authenticated",
+                email_confirmed=True,
+                claims={},
+            ),
+        )
+        return {"access_token": mint_local_token(email), "token_type": "bearer"}
 
     @app.get("/api/me")
     def me(user: dict[str, Any] = Depends(league_user)):
