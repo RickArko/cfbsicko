@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -47,7 +48,20 @@ from cfbsicko.store import (
     write_snapshot,
 )
 
-FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+def _frontend_dist() -> Path:
+    candidates = [
+        Path(os.environ["CFBSICKO_FRONTEND_DIST"]) if os.environ.get("CFBSICKO_FRONTEND_DIST") else None,
+        Path("/app/frontend/dist"),
+        Path(__file__).resolve().parents[2] / "frontend" / "dist",
+    ]
+    for path in candidates:
+        if path is not None and (path / "index.html").is_file():
+            return path
+    return Path("/app/frontend/dist")
+
+
+FRONTEND_DIST = _frontend_dist()
 
 
 class PickIn(BaseModel):
@@ -156,7 +170,8 @@ def create_app(
             return await call_next(request)
         if path.startswith("/api/"):
             return await call_next(request)
-        if host in {"www.cfbsicko.com", "cfbsicko.fly.dev"}:
+        # Only www → apex. Leave *.fly.dev alone so the site works before Namecheap DNS.
+        if host == "www.cfbsicko.com":
             dest = public + path
             if request.url.query:
                 dest += "?" + request.url.query

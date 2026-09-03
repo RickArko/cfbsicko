@@ -26,3 +26,10 @@ make fly.db-backup
 ```
 
 `PUBLIC_APP_URL` on Fly is always `https://cfbsicko.com`. `.env` localhost cannot win.
+
+## Build & Deploy
+```bash
+cd frontend && npm run build && cd ..
+make fly.deploy
+curl -s https://cfbsicko.fly.dev/api/health
+```

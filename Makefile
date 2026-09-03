@@ -42,7 +42,7 @@ fly.app:
 	$(FLY) apps create $(FLY_APP)
 
 fly.volume:
-	$(FLY) volumes create $(FLY_VOLUME) --app $(FLY_APP) --region $(FLY_REGION) --size $(FLY_VOLUME_SIZE)
+	$(FLY) volumes create $(FLY_VOLUME) --app $(FLY_APP) --region $(FLY_REGION) --size $(FLY_VOLUME_SIZE) --yes
 
 fly.secrets:
 	FLY_APP="$(FLY_APP)" FLY_PUBLIC_APP_URL="$(FLY_PUBLIC_APP_URL)" FLY_BIN="$(FLY)" \
@@ -60,7 +60,8 @@ fly.logs:
 fly.certs:
 	$(FLY) certs add cfbsicko.com --app $(FLY_APP)
 	$(FLY) certs add www.cfbsicko.com --app $(FLY_APP)
-	$(FLY) certs show --app $(FLY_APP)
+	$(FLY) certs check cfbsicko.com --app $(FLY_APP)
+	$(FLY) certs check www.cfbsicko.com --app $(FLY_APP)
 
 fly.db-backup:
 	FLY_APP="$(FLY_APP)" FLY_BIN="$(FLY)" bash scripts/fly_db_backup.sh

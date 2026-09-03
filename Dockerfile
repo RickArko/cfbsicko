@@ -37,7 +37,8 @@ ENV HOST=0.0.0.0 \
     DATABASE_PATH=/data/locks.db \
     DATABASE_TYPE=sqlite \
     WEB_AUTH_ENABLED=true \
-    REQUIRE_EMAIL_CONFIRMED=true
+    REQUIRE_EMAIL_CONFIRMED=true \
+    CFBSICKO_FRONTEND_DIST=/app/frontend/dist
 WORKDIR /app
 RUN groupadd --system --gid 1001 app \
     && useradd --system --uid 1001 --gid app --home-dir /app --shell /usr/sbin/nologin app \
