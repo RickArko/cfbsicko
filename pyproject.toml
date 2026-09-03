@@ -1,0 +1,67 @@
+[project]
+name = "cfbsicko"
+version = "0.1.0"
+description = "Private CFB locks league — frozen lines, five picks, running standings"
+readme = "README.md"
+authors = [
+    { name = "RickArko", email = "rick.arko17@gmail.com" },
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-dotenv>=1.0.0",
+    "PyJWT[crypto]>=2.9.0",
+    "requests>=2.31.0",
+    "pydantic>=2.0.0",
+    "openpyxl>=3.1.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+cfbsicko = "cfbsicko.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pre-commit>=4.0.0",
+    "pytest>=9.0.2",
+    "ruff>=0.15.22",
+]
+
+[tool.uv.build-backend]
+module-name = "cfbsicko"
+module-root = "src"
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+src = ["src"]
+extend-exclude = [".venv", "dist", "build", "frontend"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]
+"scripts/**" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cfbsicko"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = "-v --tb=short"

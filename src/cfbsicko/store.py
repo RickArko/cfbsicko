@@ -1,0 +1,578 @@
+"""League persistence: invites, picks, lock, grade, standings, snapshots."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import secrets
+import sqlite3
+from datetime import datetime
+from typing import Any
+
+from cfbsicko.auth import AuthenticatedUser
+from cfbsicko.config import Config
+from cfbsicko.parse import parse_slate
+from cfbsicko.rules import (
+    PickSpec,
+    PickValidationError,
+    WeeklyRecord,
+    is_before_lock,
+    payout_preview,
+    result_for_pick,
+    sort_standings,
+    validate_pick_set,
+)
+
+
+class InviteRequiredError(PermissionError):
+    """Authenticated but not on the allowlist."""
+
+
+class LockClosedError(PermissionError):
+    """Picks are locked."""
+
+
+class NotFoundError(KeyError):
+    """Missing week/game/user."""
+
+
+def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    return dict(row) if row is not None else None
+
+
+def parse_lock_at(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+def current_week(conn: sqlite3.Connection, season: int | None = None) -> dict[str, Any] | None:
+    season = season or Config.SEASON
+    row = conn.execute(
+        """
+        SELECT * FROM weeks
+        WHERE season = ?
+        ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'locked' THEN 1 WHEN 'graded' THEN 2 ELSE 3 END,
+                 week_no DESC
+        LIMIT 1
+        """,
+        (season,),
+    ).fetchone()
+    return _row(row)
+
+
+def get_week(conn: sqlite3.Connection, week_no: int, season: int | None = None) -> dict[str, Any]:
+    season = season or Config.SEASON
+    row = conn.execute(
+        "SELECT * FROM weeks WHERE season = ? AND week_no = ?",
+        (season, week_no),
+    ).fetchone()
+    if row is None:
+        raise NotFoundError(f"week {week_no}")
+    return dict(row)
+
+
+def list_games(conn: sqlite3.Connection, week_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT g.*, r.home_score, r.away_score
+        FROM games g
+        LEFT JOIN game_results r ON r.game_id = g.id
+        WHERE g.week_id = ?
+        ORDER BY g.sort_order, g.id
+        """,
+        (week_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def upsert_invited_user(conn: sqlite3.Connection, auth: AuthenticatedUser) -> dict[str, Any]:
+    email = (auth.email or "").strip().lower()
+    if not email:
+        raise InviteRequiredError("token has no email")
+
+    existing = conn.execute(
+        "SELECT * FROM users WHERE supabase_user_id = ? OR email = ?",
+        (auth.user_id, email),
+    ).fetchone()
+    commish = email in Config.commish_emails()
+    invite = conn.execute("SELECT * FROM invites WHERE email = ?", (email,)).fetchone()
+
+    if existing is None and invite is None and not commish:
+        raise InviteRequiredError("email is not invited")
+
+    if existing is None:
+        display = invite["display_name"] if invite and invite["display_name"] else email.split("@")[0]
+        # Link a sheet-imported display-name row when the invite carries that name.
+        named = None
+        if invite and invite["display_name"]:
+            named = conn.execute(
+                "SELECT * FROM users WHERE display_name = ? AND supabase_user_id IS NULL",
+                (invite["display_name"],),
+            ).fetchone()
+        if named:
+            conn.execute(
+                """
+                UPDATE users SET supabase_user_id = ?, email = ?, is_commish = ?
+                WHERE id = ?
+                """,
+                (auth.user_id, email, 1 if commish else named["is_commish"], named["id"]),
+            )
+            user_id = named["id"]
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO users (supabase_user_id, email, display_name, is_commish)
+                VALUES (?, ?, ?, ?)
+                """,
+                (auth.user_id, email, display, 1 if commish else 0),
+            )
+            user_id = cur.lastrowid
+    else:
+        conn.execute(
+            """
+            UPDATE users SET supabase_user_id = ?, email = ?,
+                is_commish = CASE WHEN ? THEN 1 ELSE is_commish END
+            WHERE id = ?
+            """,
+            (auth.user_id, email, 1 if commish else 0, existing["id"]),
+        )
+        user_id = existing["id"]
+
+    if invite and invite["accepted_at"] is None:
+        conn.execute("UPDATE invites SET accepted_at = datetime('now') WHERE id = ?", (invite["id"],))
+    conn.commit()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    assert row is not None
+    return dict(row)
+
+
+def create_invite(
+    conn: sqlite3.Connection,
+    *,
+    email: str,
+    display_name: str | None,
+    invited_by: int | None,
+) -> dict[str, Any]:
+    email_n = email.strip().lower()
+    token = secrets.token_urlsafe(24)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    conn.execute(
+        """
+        INSERT INTO invites (email, display_name, token_hash, invited_by)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET
+            display_name = excluded.display_name,
+            token_hash = excluded.token_hash,
+            invited_by = excluded.invited_by,
+            accepted_at = NULL
+        """,
+        (email_n, display_name, token_hash, invited_by),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM invites WHERE email = ?", (email_n,)).fetchone()
+    assert row is not None
+    payload = dict(row)
+    payload["token"] = token
+    return payload
+
+
+def week_is_writable(week: dict[str, Any], now: datetime) -> bool:
+    if week["status"] != "open":
+        return False
+    return is_before_lock(now, parse_lock_at(week["lock_at"]))
+
+
+def save_picks(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    week: dict[str, Any],
+    picks: list[PickSpec],
+    now: datetime,
+) -> list[dict[str, Any]]:
+    if not week_is_writable(week, now):
+        raise LockClosedError("week is locked")
+    validate_pick_set(picks)
+    game_ids = {row["id"] for row in list_games(conn, week["id"])}
+    for pick in picks:
+        if pick.game_id not in game_ids:
+            raise PickValidationError(f"game {pick.game_id} is not on this slate")
+    conn.execute("DELETE FROM picks WHERE user_id = ? AND week_id = ?", (user_id, week["id"]))
+    for pick in picks:
+        conn.execute(
+            """
+            INSERT INTO picks (user_id, week_id, slot, game_id, market, side)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, week["id"], pick.slot, pick.game_id, pick.market, pick.side),
+        )
+    conn.commit()
+    return list_user_picks(conn, user_id, week["id"])
+
+
+def list_user_picks(conn: sqlite3.Connection, user_id: int, week_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT p.*, g.away, g.home, g.spread_home, g.total, g.day_label
+        FROM picks p
+        JOIN games g ON g.id = p.game_id
+        WHERE p.user_id = ? AND p.week_id = ?
+        ORDER BY p.slot
+        """,
+        (user_id, week_id),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def board(conn: sqlite3.Connection, week: dict[str, Any], now: datetime) -> list[dict[str, Any]] | None:
+    if week_is_writable(week, now) and week["status"] == "open":
+        return None
+    users = conn.execute(
+        """
+        SELECT u.id, u.display_name
+        FROM users u
+        ORDER BY u.display_name
+        """
+    ).fetchall()
+    out = []
+    for user in users:
+        out.append(
+            {
+                "user_id": user["id"],
+                "display_name": user["display_name"],
+                "picks": list_user_picks(conn, user["id"], week["id"]),
+            }
+        )
+    return out
+
+
+def publish_slate(
+    conn: sqlite3.Connection,
+    *,
+    week_no: int,
+    slate_text: str,
+    lock_at: str,
+    season: int | None = None,
+    title: str | None = None,
+) -> dict[str, Any]:
+    season = season or Config.SEASON
+    games = parse_slate(slate_text)
+    if not games:
+        raise ValueError("slate contained no games")
+    conn.execute(
+        """
+        INSERT INTO weeks (season, week_no, title, lock_at, status, publish_at)
+        VALUES (?, ?, ?, ?, 'open', datetime('now'))
+        ON CONFLICT(season, week_no) DO UPDATE SET
+            title = excluded.title,
+            lock_at = excluded.lock_at,
+            status = 'open',
+            publish_at = datetime('now')
+        """,
+        (season, week_no, title or f"Week {week_no}", lock_at),
+    )
+    week = get_week(conn, week_no, season)
+    conn.execute("DELETE FROM picks WHERE week_id = ?", (week["id"],))
+    conn.execute(
+        "DELETE FROM game_results WHERE game_id IN (SELECT id FROM games WHERE week_id = ?)",
+        (week["id"],),
+    )
+    conn.execute("DELETE FROM games WHERE week_id = ?", (week["id"],))
+    for order, game in enumerate(games):
+        conn.execute(
+            """
+            INSERT INTO games (week_id, away, home, spread_home, total, day_label, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (week["id"], game.away, game.home, game.spread_home, game.total, game.day_label, order),
+        )
+    conn.commit()
+    return get_week(conn, week_no, season)
+
+
+def update_week(
+    conn: sqlite3.Connection,
+    week_no: int,
+    *,
+    lock_at: str | None = None,
+    status: str | None = None,
+    season: int | None = None,
+) -> dict[str, Any]:
+    week = get_week(conn, week_no, season)
+    if lock_at:
+        conn.execute("UPDATE weeks SET lock_at = ? WHERE id = ?", (lock_at, week["id"]))
+    if status:
+        if status not in {"draft", "open", "locked", "graded"}:
+            raise ValueError(f"invalid status {status}")
+        conn.execute("UPDATE weeks SET status = ? WHERE id = ?", (status, week["id"]))
+    conn.commit()
+    return get_week(conn, week_no, season)
+
+
+def set_game_result(
+    conn: sqlite3.Connection,
+    game_id: int,
+    *,
+    home_score: int,
+    away_score: int,
+    entered_by: int | None,
+    source: str = "manual",
+) -> dict[str, Any]:
+    before = _row(conn.execute("SELECT * FROM game_results WHERE game_id = ?", (game_id,)).fetchone())
+    conn.execute(
+        """
+        INSERT INTO game_results (game_id, home_score, away_score, source, entered_by)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(game_id) DO UPDATE SET
+            home_score = excluded.home_score,
+            away_score = excluded.away_score,
+            source = excluded.source,
+            entered_by = excluded.entered_by,
+            entered_at = datetime('now')
+        """,
+        (game_id, home_score, away_score, source, entered_by),
+    )
+    after = dict(conn.execute("SELECT * FROM game_results WHERE game_id = ?", (game_id,)).fetchone())
+    write_audit(
+        conn,
+        actor_user_id=entered_by,
+        action="set_score",
+        entity="game_results",
+        entity_id=str(game_id),
+        before=before,
+        after=after,
+    )
+    conn.commit()
+    return after
+
+
+def grade_week(conn: sqlite3.Connection, week_no: int, *, season: int | None = None) -> dict[str, Any]:
+    week = get_week(conn, week_no, season)
+    games = {g["id"]: g for g in list_games(conn, week["id"])}
+    picks = conn.execute("SELECT * FROM picks WHERE week_id = ?", (week["id"],)).fetchall()
+    for pick in picks:
+        game = games[pick["game_id"]]
+        if game["home_score"] is None or game["away_score"] is None:
+            continue
+        result = result_for_pick(
+            market=pick["market"],
+            side=pick["side"],
+            home_score=int(game["home_score"]),
+            away_score=int(game["away_score"]),
+            spread_home=float(game["spread_home"]),
+            total=float(game["total"]),
+            override=pick["override_result"],
+        )
+        conn.execute("UPDATE picks SET result = ? WHERE id = ?", (result, pick["id"]))
+    users = conn.execute("SELECT id FROM users").fetchall()
+    for user in users:
+        rows = conn.execute(
+            "SELECT result FROM picks WHERE user_id = ? AND week_id = ?",
+            (user["id"], week["id"]),
+        ).fetchall()
+        wins = sum(1 for r in rows if r["result"] == "W")
+        ties = sum(1 for r in rows if r["result"] == "T")
+        losses = sum(1 for r in rows if r["result"] == "L")
+        conn.execute(
+            """
+            INSERT INTO week_records (user_id, week_id, wins, ties, losses)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, week_id) DO UPDATE SET
+                wins = excluded.wins, ties = excluded.ties, losses = excluded.losses
+            """,
+            (user["id"], week["id"], wins, ties, losses),
+        )
+    conn.execute("UPDATE weeks SET status = 'graded' WHERE id = ?", (week["id"],))
+    conn.commit()
+    snap = write_snapshot(conn, week["id"], "grade")
+    return {"week": get_week(conn, week_no, season), "snapshot_id": snap["id"]}
+
+
+def override_pick(
+    conn: sqlite3.Connection,
+    pick_id: int,
+    result: str,
+    *,
+    actor_user_id: int | None,
+) -> dict[str, Any]:
+    if result not in {"W", "T", "L"}:
+        raise ValueError("override must be W, T, or L")
+    before = _row(conn.execute("SELECT * FROM picks WHERE id = ?", (pick_id,)).fetchone())
+    if before is None:
+        raise NotFoundError("pick")
+    conn.execute(
+        "UPDATE picks SET override_result = ?, result = ? WHERE id = ?",
+        (result, result, pick_id),
+    )
+    after = dict(conn.execute("SELECT * FROM picks WHERE id = ?", (pick_id,)).fetchone())
+    write_audit(
+        conn,
+        actor_user_id=actor_user_id,
+        action="override_pick",
+        entity="picks",
+        entity_id=str(pick_id),
+        before=before,
+        after=after,
+    )
+    conn.commit()
+    return after
+
+
+def set_paid(conn: sqlite3.Connection, user_id: int, paid: bool) -> dict[str, Any]:
+    conn.execute("UPDATE users SET buy_in_paid = ? WHERE id = ?", (1 if paid else 0, user_id))
+    conn.commit()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise NotFoundError("user")
+    return dict(row)
+
+
+def standings(conn: sqlite3.Connection, season: int | None = None) -> dict[str, Any]:
+    season = season or Config.SEASON
+    rows = conn.execute(
+        """
+        SELECT u.id AS user_id, u.display_name, u.buy_in_paid,
+               COALESCE(SUM(wr.wins), 0) AS wins,
+               COALESCE(SUM(wr.ties), 0) AS ties,
+               COALESCE(SUM(wr.losses), 0) AS losses
+        FROM users u
+        LEFT JOIN week_records wr ON wr.user_id = u.id
+        LEFT JOIN weeks w ON w.id = wr.week_id AND w.season = ?
+        GROUP BY u.id
+        """,
+        (season,),
+    ).fetchall()
+    records = [
+        WeeklyRecord(
+            user_id=row["user_id"],
+            display_name=row["display_name"],
+            wins=int(row["wins"]),
+            ties=int(row["ties"]),
+            losses=int(row["losses"]),
+            buy_in_paid=bool(row["buy_in_paid"]),
+        )
+        for row in rows
+    ]
+    ranked = sort_standings(records)
+    paid = sum(1 for r in ranked if r.buy_in_paid)
+    weekly = conn.execute(
+        """
+        SELECT wr.*, u.display_name, w.week_no
+        FROM week_records wr
+        JOIN users u ON u.id = wr.user_id
+        JOIN weeks w ON w.id = wr.week_id
+        WHERE w.season = ?
+        ORDER BY w.week_no, u.display_name
+        """,
+        (season,),
+    ).fetchall()
+    return {
+        "season": season,
+        "table": [
+            {
+                "rank": idx + 1,
+                "user_id": r.user_id,
+                "display_name": r.display_name,
+                "wins": r.wins,
+                "ties": r.ties,
+                "losses": r.losses,
+                "record": r.label,
+                "buy_in_paid": r.buy_in_paid,
+            }
+            for idx, r in enumerate(ranked)
+        ],
+        "weekly": [dict(row) for row in weekly],
+        "payout": payout_preview(paid).__dict__,
+    }
+
+
+def write_audit(
+    conn: sqlite3.Connection,
+    *,
+    actor_user_id: int | None,
+    action: str,
+    entity: str,
+    entity_id: str,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO audit_log (actor_user_id, action, entity, entity_id, before_json, after_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            actor_user_id,
+            action,
+            entity,
+            entity_id,
+            json.dumps(before) if before else None,
+            json.dumps(after) if after else None,
+        ),
+    )
+
+
+def write_snapshot(conn: sqlite3.Connection, week_id: int, kind: str) -> dict[str, Any]:
+    week = dict(conn.execute("SELECT * FROM weeks WHERE id = ?", (week_id,)).fetchone())
+    payload = {
+        "week": week,
+        "games": list_games(conn, week_id),
+        "picks": [dict(r) for r in conn.execute("SELECT * FROM picks WHERE week_id = ?", (week_id,))],
+        "records": [
+            dict(r) for r in conn.execute("SELECT * FROM week_records WHERE week_id = ?", (week_id,))
+        ],
+    }
+    cur = conn.execute(
+        "INSERT INTO week_snapshots (week_id, kind, payload_json) VALUES (?, ?, ?)",
+        (week_id, kind, json.dumps(payload)),
+    )
+    conn.commit()
+    return {"id": cur.lastrowid, "week_id": week_id, "kind": kind}
+
+
+def list_snapshots(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT id, week_id, kind, created_at FROM week_snapshots ORDER BY id DESC"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> dict[str, Any]:
+    row = conn.execute("SELECT * FROM week_snapshots WHERE id = ?", (snapshot_id,)).fetchone()
+    if row is None:
+        raise NotFoundError("snapshot")
+    payload = json.loads(row["payload_json"])
+    return {
+        "id": row["id"],
+        "week_id": row["week_id"],
+        "kind": row["kind"],
+        "created_at": row["created_at"],
+        **payload,
+    }
+
+
+def users_missing_picks(conn: sqlite3.Connection, week_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT u.id, u.display_name, u.email, COUNT(p.id) AS n
+        FROM users u
+        LEFT JOIN picks p ON p.user_id = u.id AND p.week_id = ?
+        GROUP BY u.id
+        HAVING n < 5
+        ORDER BY u.display_name
+        """,
+        (week_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_users(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [
+        dict(r)
+        for r in conn.execute(
+            "SELECT id, display_name, email, is_commish, buy_in_paid FROM users ORDER BY display_name"
+        )
+    ]
+
+
+def list_invited_emails(conn: sqlite3.Connection) -> list[str]:
+    return [r["email"] for r in conn.execute("SELECT email FROM users WHERE email IS NOT NULL")]
