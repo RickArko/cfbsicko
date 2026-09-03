@@ -47,6 +47,8 @@ RUN groupadd --system --gid 1001 app \
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /build/src /app/src
 COPY --from=frontend /fe/dist /app/frontend/dist
+# Also sit next to the installed package (uv --no-editable lives in site-packages).
+COPY --from=frontend /fe/dist /opt/venv/lib/python3.13/site-packages/cfbsicko/static
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 VOLUME ["/data"]
 EXPOSE 8000

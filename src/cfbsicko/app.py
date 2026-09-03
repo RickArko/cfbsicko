@@ -49,19 +49,18 @@ from cfbsicko.store import (
 )
 
 
-def _frontend_dist() -> Path:
+def _frontend_dist() -> Path | None:
+    raw = os.environ.get("CFBSICKO_FRONTEND_DIST")
     candidates = [
-        Path(os.environ["CFBSICKO_FRONTEND_DIST"]) if os.environ.get("CFBSICKO_FRONTEND_DIST") else None,
+        Path(raw) if raw else None,
         Path("/app/frontend/dist"),
+        Path(__file__).resolve().parent / "static",
         Path(__file__).resolve().parents[2] / "frontend" / "dist",
     ]
     for path in candidates:
         if path is not None and (path / "index.html").is_file():
             return path
-    return Path("/app/frontend/dist")
-
-
-FRONTEND_DIST = _frontend_dist()
+    return None
 
 
 class PickIn(BaseModel):
@@ -178,9 +177,16 @@ def create_app(
             return RedirectResponse(dest, status_code=301)
         return await call_next(request)
 
+    frontend = _frontend_dist()
+
     @app.get("/api/health")
     def health():
-        return {"ok": True, "service": "cfbsicko", "season": Config.SEASON}
+        return {
+            "ok": True,
+            "service": "cfbsicko",
+            "season": Config.SEASON,
+            "frontend": frontend is not None,
+        }
 
     @app.get("/api/auth/config")
     def auth_config():
@@ -416,22 +422,22 @@ def create_app(
             sent += 1
         return {"sent": sent}
 
-    if FRONTEND_DIST.is_dir():
-        assets = FRONTEND_DIST / "assets"
+    if frontend is not None:
+        assets = frontend / "assets"
         if assets.is_dir():
             app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
         @app.get("/")
         def landing():
-            return FileResponse(FRONTEND_DIST / "index.html")
+            return FileResponse(frontend / "index.html")
 
         @app.get("/app/{full_path:path}")
         def spa(full_path: str):
-            return FileResponse(FRONTEND_DIST / "index.html")
+            return FileResponse(frontend / "index.html")
 
         @app.get("/app")
         def spa_root():
-            return FileResponse(FRONTEND_DIST / "index.html")
+            return FileResponse(frontend / "index.html")
     else:
 
         @app.get("/")
