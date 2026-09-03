@@ -18,6 +18,8 @@ See [backup-dr.md](backup-dr.md) for the SQLite file.
 make fly.app
 make fly.volume
 make fly.secrets
+make fly.test-login        # optional, temporary password on Fly
+make fly.test-login-off
 make fly.deploy
 make fly.status
 make fly.logs

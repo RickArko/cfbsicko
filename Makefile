@@ -10,7 +10,8 @@ FLY_PUBLIC_URL ?= https://cfbsicko.fly.dev
 SEASON ?= 2026
 
 .PHONY: bootstrap run test lint fmt supabase.check \
-	fly.app fly.volume fly.secrets fly.deploy fly.status fly.logs fly.certs \
+	fly.app fly.volume fly.secrets fly.test-login fly.test-login-off \
+	fly.deploy fly.status fly.logs fly.certs \
 	fly.db-backup fly.db-backup-verify fly.db-restore import-sheet
 
 bootstrap: ## uv sync + .env from example
@@ -47,6 +48,12 @@ fly.volume:
 fly.secrets:
 	FLY_APP="$(FLY_APP)" FLY_PUBLIC_APP_URL="$(FLY_PUBLIC_APP_URL)" FLY_BIN="$(FLY)" \
 		bash scripts/fly_set_secrets.sh
+
+fly.test-login:
+	FLY_APP="$(FLY_APP)" FLY_BIN="$(FLY)" bash scripts/fly_set_test_login.sh on
+
+fly.test-login-off:
+	FLY_APP="$(FLY_APP)" FLY_BIN="$(FLY)" bash scripts/fly_set_test_login.sh off
 
 fly.deploy:
 	$(FLY) deploy --app $(FLY_APP)

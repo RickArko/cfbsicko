@@ -42,5 +42,8 @@ From host must be `cfbsicko.com`. Delivery `smtp`.
 2. Sender name `CFB Sicko`, sender `locks@cfbsicko.com`, host `smtp.resend.com`, port `465`, user `resend`, password = same API key.
 3. Raise Auth emails/hour off the 2/hour default (300 is fine for twelve people).
 4. One password-reset / magic-link probe. Link host must be `https://cfbsicko.com`.
+5. Edit the Magic Link template so the 6-digit `{{ .Token }}` is first. ProtonMail consumes the link (`otp_expired`); users type the code.
+
+Until this is done, use `make fly.test-login` (see [auth-prod.md](../../.ai/plans/auth-prod.md)).
 
 Do not buy a higher Supabase plan for this — it does not lift the built-in 2/hour mailer.

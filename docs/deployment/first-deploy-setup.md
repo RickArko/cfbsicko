@@ -86,6 +86,24 @@ In Namecheap for `cfbsicko.com`:
 
 Wait until `fly certs check` is Ready. Document URLs on `www` and `cfbsicko.fly.dev` 301 to `https://cfbsicko.com`. Ops curls stay on `https://cfbsicko.fly.dev/api/health`.
 
+## 5b. Temporary test login (only until Auth mail works)
+
+Password login is off on Fly unless you opt in. After a deploy that includes `ALLOW_TEST_LOGIN`:
+
+```bash
+make fly.test-login
+```
+
+Sign in on `https://cfbsicko.fly.dev/` with `.env` `TEST_EMAIL` / `TEST_PASS`. Unset before inviting the league:
+
+```bash
+make fly.test-login-off
+```
+
+Full order (DNS parking, Site URL, Resend Auth SMTP, Proton codes): [`.ai/plans/auth-prod.md`](../../.ai/plans/auth-prod.md).
+
+If `cfbsicko.com` hangs or shows a Namecheap parking page, this Mac is still resolving `@` to `192.64.119.182`. Remove URL Redirect / Parking records; keep only the Fly A/AAAA. Use fly.dev until `dig +short A cfbsicko.com` is `66.241.125.155`.
+
 ## 6. Supabase production URLs
 
 | Setting | Value |

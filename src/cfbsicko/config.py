@@ -58,6 +58,12 @@ class Config:
     TEST_EMAIL: str = (os.getenv("TEST_EMAIL") or "rickarko@pm.me").strip().lower()
     TEST_PASS: str = os.getenv("TEST_PASS") or ""
     TEST_DISPLAY_NAME: str = os.getenv("TEST_DISPLAY_NAME") or "Rick"
+    ALLOW_TEST_LOGIN: bool = (os.getenv("ALLOW_TEST_LOGIN") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     @classmethod
     def database_path(cls) -> Path:
@@ -84,9 +90,11 @@ class Config:
 
     @classmethod
     def local_login_enabled(cls) -> bool:
-        """Password test user. Never on cfbsicko.com / Fly."""
+        """Password test user. Off on Fly unless ALLOW_TEST_LOGIN is set."""
         if not cls.TEST_PASS:
             return False
+        if cls.ALLOW_TEST_LOGIN:
+            return True
         public = cls.PUBLIC_APP_URL.lower()
         if "cfbsicko.com" in public or "fly.dev" in public:
             return False
@@ -130,3 +138,9 @@ def reload_config() -> None:
     Config.TEST_EMAIL = (os.getenv("TEST_EMAIL") or "rickarko@pm.me").strip().lower()
     Config.TEST_PASS = os.getenv("TEST_PASS") or ""
     Config.TEST_DISPLAY_NAME = os.getenv("TEST_DISPLAY_NAME") or "Rick"
+    Config.ALLOW_TEST_LOGIN = (os.getenv("ALLOW_TEST_LOGIN") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }

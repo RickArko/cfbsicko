@@ -53,5 +53,35 @@ def test_local_login_off_on_production_url(imported):
             assert denied.status_code == 404
     finally:
         os.environ.pop("TEST_PASS", None)
+        os.environ.pop("ALLOW_TEST_LOGIN", None)
+        os.environ["PUBLIC_APP_URL"] = "http://test"
+        reload_config()
+
+
+def test_allow_test_login_overrides_production_url(imported):
+    os.environ["TEST_PASS"] = "cfbSick"
+    os.environ["TEST_EMAIL"] = "rickarko@pm.me"
+    os.environ["PUBLIC_APP_URL"] = "https://cfbsicko.com"
+    os.environ["HOST"] = "0.0.0.0"
+    os.environ["ALLOW_TEST_LOGIN"] = "true"
+    reload_config()
+    try:
+        app = create_app(db_path=imported)
+        with TestClient(app) as client:
+            cfg = client.get("/api/auth/config").json()
+            assert cfg["local_login"] is True
+            assert cfg["test_email"] == "rickarko@pm.me"
+            ok = client.post(
+                "/api/auth/dev-login",
+                json={"email": "rickarko@pm.me", "password": "cfbSick"},
+            )
+            assert ok.status_code == 200, ok.text
+            token = ok.json()["access_token"]
+            me = client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+            assert me.status_code == 200
+            assert me.json()["email"] == "rickarko@pm.me"
+    finally:
+        os.environ.pop("TEST_PASS", None)
+        os.environ.pop("ALLOW_TEST_LOGIN", None)
         os.environ["PUBLIC_APP_URL"] = "http://test"
         reload_config()

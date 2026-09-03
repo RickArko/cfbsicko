@@ -2,25 +2,25 @@
   <section class="wrap card">
     <h2>Sign in</h2>
     <form v-if="localLogin" class="row" @submit.prevent="passwordLogin">
-      <p class="muted" style="flex-basis: 100%">Local test login. Not used on cfbsicko.com.</p>
+      <p class="muted" style="flex-basis: 100%">
+        Temporary password login (test user). Turn this off once email codes work.
+      </p>
       <input v-model="email" type="email" required />
       <input v-model="password" type="password" required placeholder="password" />
       <button type="submit" :disabled="busy">Sign in</button>
     </form>
-    <template v-else>
-      <p class="muted">
-        We email a 6-digit code. Type it here. Do not click the link if you use ProtonMail.
-      </p>
-      <form v-if="!sent" class="row" @submit.prevent="send">
-        <input v-model="email" type="email" required placeholder="you@school.edu" />
-        <button type="submit" :disabled="busy">Send code</button>
-      </form>
-      <form v-else class="row" @submit.prevent="confirm">
-        <input v-model="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="123456" />
-        <button type="submit" :disabled="busy || code.trim().length < 6">Enter</button>
-        <button class="ghost" type="button" :disabled="busy" @click="sent = false">Resend</button>
-      </form>
-    </template>
+    <p class="muted">
+      We email a 6-digit code. Type it here. Do not click the link if you use ProtonMail.
+    </p>
+    <form v-if="!sent" class="row" @submit.prevent="send">
+      <input v-if="!localLogin" v-model="email" type="email" required placeholder="you@school.edu" />
+      <button type="submit" :disabled="busy">Send code</button>
+    </form>
+    <form v-else class="row" @submit.prevent="confirm">
+      <input v-model="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="123456" />
+      <button type="submit" :disabled="busy || code.trim().length < 6">Enter</button>
+      <button class="ghost" type="button" :disabled="busy" @click="sent = false">Resend</button>
+    </form>
     <p v-if="note" class="muted">{{ note }}</p>
   </section>
 </template>
