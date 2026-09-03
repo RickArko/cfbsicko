@@ -139,9 +139,7 @@ def migrate(conn: sqlite3.Connection) -> None:
             "INSERT INTO schema_migrations (version, checksum) VALUES (?, ?)",
             (SCHEMA_VERSION, checksum),
         )
-        conn.commit()
-        return
-    if row["checksum"] != checksum:
+    elif row["checksum"] != checksum:
         raise RuntimeError("schema_migrations checksum mismatch — refuse to boot")
     from cfbsicko.leagues import migrate_leagues
 

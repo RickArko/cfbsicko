@@ -46,6 +46,26 @@ def main(argv: list[str] | None = None) -> int:
     mail.add_argument("to")
     mail.add_argument("--kind", default="slate", choices=["slate", "reminder", "standings"])
 
+    invite = sub.add_parser(
+        "invite-group",
+        help="Print or send the single trial-league signup email",
+    )
+    invite.add_argument(
+        "--review",
+        action="store_true",
+        help="Send the draft to the commissioner only",
+    )
+    invite.add_argument(
+        "--blast",
+        action="store_true",
+        help="Send one email to the whole trial roster",
+    )
+    invite.add_argument(
+        "--i-reviewed",
+        action="store_true",
+        help="Required with --blast so a review pass cannot be skipped",
+    )
+
     args = parser.parse_args(argv)
     cmd = args.cmd or "serve"
 
@@ -93,6 +113,41 @@ def main(argv: list[str] | None = None) -> int:
 
         send_probe(args.to, kind=args.kind)
         print("sent")
+        return 0
+
+    if cmd == "invite-group":
+        from cfbsicko.mail import group_invite_body, group_invite_review_body, send_mail
+        from cfbsicko.trial_roster import trial_emails
+
+        recipients = trial_emails()
+        commish = (Config.commish_emails() or [recipients[0]])[0]
+        app_url = Config.PUBLIC_APP_URL
+        if "127.0.0.1" in app_url or "localhost" in app_url:
+            app_url = "https://cfbsicko.com"
+
+        if args.review and args.blast:
+            print("use --review or --blast, not both", file=sys.stderr)
+            return 2
+        if args.blast and not args.i_reviewed:
+            print("refusing --blast without --i-reviewed (send a --review first)", file=sys.stderr)
+            return 2
+
+        if args.review:
+            subject, body = group_invite_review_body(app_url=app_url, recipients=recipients)
+            send_mail(commish, subject, body)
+            print(f"review sent to {commish}")
+            return 0
+        if args.blast:
+            subject, body = group_invite_body(app_url=app_url)
+            send_mail(recipients, subject, body)
+            print(f"blast sent to {len(recipients)} addresses")
+            return 0
+
+        subject, body = group_invite_review_body(app_url=app_url, recipients=recipients)
+        print(f"To (review): {commish}")
+        print(f"Subject: {subject}")
+        print()
+        print(body)
         return 0
 
     host = args.host or Config.HOST

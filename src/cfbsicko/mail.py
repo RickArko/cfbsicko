@@ -61,13 +61,54 @@ def get_sender() -> MailSender:
     )
 
 
-def _message(to: str, subject: str, body: str) -> EmailMessage:
+def _message(
+    to: str | list[str],
+    subject: str,
+    body: str,
+    *,
+    bcc: list[str] | None = None,
+) -> EmailMessage:
     msg = EmailMessage()
     msg["From"] = Config.SMTP_FROM
-    msg["To"] = to
+    recipients = [to] if isinstance(to, str) else [part.strip() for part in to if part.strip()]
+    msg["To"] = ", ".join(recipients)
+    if bcc:
+        msg["Bcc"] = ", ".join(part.strip() for part in bcc if part.strip())
     msg["Subject"] = subject
     msg.set_content(body)
     return msg
+
+
+def group_invite_body(*, app_url: str) -> tuple[str, str]:
+    subject = "The sheet is dead. Lock your five."
+    body = (
+        "The 2026 locks league lives at cfbsicko.com now. No spreadsheet.\n\n"
+        "Five locks a week. Frozen Tuesday lines. Window closes Thursday 6pm ET.\n"
+        "The board stays dark until lock.\n\n"
+        f"If your email is on this list, sign in here:\n{app_url}/app\n\n"
+        "We email a 6-digit code. Type it on that page.\n"
+        "If you use ProtonMail, do not tap the link — Proton prefetches it and burns the code.\n\n"
+        "House rules (same as always):\n"
+        "$75 buy-in. Winner 60%, second 30%, third 10%.\n"
+        "Bottom three each owe another $75 to one of the top three.\n"
+        "FBS vs FCS counts. Conference championships and Army-Navy do not.\n\n"
+        "See you Thursday.\n"
+    )
+    return subject, body
+
+
+def group_invite_review_body(*, app_url: str, recipients: list[str]) -> tuple[str, str]:
+    subject, body = group_invite_body(app_url=app_url)
+    listed = "\n".join(f"  {email}" for email in recipients)
+    wrapped = (
+        "REVIEW ONLY — this has not gone to the league.\n"
+        "If it looks right:  make invite-blast\n\n"
+        f"Blast list ({len(recipients)}):\n{listed}\n\n"
+        "---------- message below ----------\n\n"
+        f"Subject: {subject}\n\n"
+        f"{body}"
+    )
+    return f"[review] {subject}", wrapped
 
 
 def invite_body(*, display_name: str | None, app_url: str) -> tuple[str, str]:
@@ -105,8 +146,14 @@ def standings_body(*, week_title: str, table_text: str, app_url: str) -> tuple[s
     return subject, body
 
 
-def send_mail(to: str, subject: str, body: str) -> str:
-    return get_sender().send(_message(to, subject, body))
+def send_mail(
+    to: str | list[str],
+    subject: str,
+    body: str,
+    *,
+    bcc: list[str] | None = None,
+) -> str:
+    return get_sender().send(_message(to, subject, body, bcc=bcc))
 
 
 def send_invite(to: str, *, display_name: str | None = None) -> str:

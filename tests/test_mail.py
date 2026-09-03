@@ -1,6 +1,8 @@
 from email.message import EmailMessage
 
 from cfbsicko.mail import (
+    group_invite_body,
+    group_invite_review_body,
     invite_body,
     lock_reminder_body,
     send_invite,
@@ -11,6 +13,7 @@ from cfbsicko.mail import (
     slate_published_body,
     standings_body,
 )
+from cfbsicko.trial_roster import TRIAL_ROSTER, trial_emails
 
 
 class RecordingSender:
@@ -36,6 +39,19 @@ def test_templates_and_mocked_send():
         assert "You're in" in inv_s
         assert "Lock your five" in inv_b
         assert "https://cfbsicko.com/app" in inv_b
+        grp_s, grp_b = group_invite_body(app_url="https://cfbsicko.com")
+        assert "Lock your five" in grp_s
+        assert "https://cfbsicko.com/app" in grp_b
+        assert "ProtonMail" in grp_b
+        assert "sheet" in grp_b.lower()
+        rev_s, rev_b = group_invite_review_body(
+            app_url="https://cfbsicko.com", recipients=["a@example.com", "b@example.com"]
+        )
+        assert rev_s.startswith("[review]")
+        assert "REVIEW ONLY" in rev_b
+        assert "a@example.com" in rev_b
+        assert len(TRIAL_ROSTER) == 12
+        assert trial_emails()[0] == "rickarko@pm.me"
         _rem_s, rem_b = lock_reminder_body(
             week_title="Week 1", lock_at="Thu 6pm", have=2, app_url="https://cfbsicko.com"
         )

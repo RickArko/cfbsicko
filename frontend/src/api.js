@@ -1,7 +1,22 @@
+const LEAGUE_KEY = "cfbsicko_league_id";
+
+export function getLeagueId() {
+  const raw = localStorage.getItem(LEAGUE_KEY);
+  const n = raw ? Number(raw) : 0;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function setLeagueId(id) {
+  if (id) localStorage.setItem(LEAGUE_KEY, String(id));
+  else localStorage.removeItem(LEAGUE_KEY);
+}
+
 export async function api(path, { method = "GET", token, body } = {}) {
   const headers = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (token) headers.Authorization = `Bearer ${token}`;
+  const leagueId = getLeagueId();
+  if (leagueId) headers["X-League-Id"] = String(leagueId);
   const res = await fetch(path, {
     method,
     headers,

@@ -132,6 +132,22 @@ def test_grade_override_standings_and_snapshot(client, commish_headers):
     assert "picks" in body.json()
 
 
+def test_invite_survives_mail_failure(client, commish_headers, app):
+    def boom(*_a, **_k):
+        raise RuntimeError("smtp down")
+
+    app.state.mail_send = boom
+    r = client.post(
+        "/api/admin/invites",
+        json={"email": "jack@example.com", "display_name": "Jack"},
+        headers=commish_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["mailed"] is False
+    me = client.get("/api/me", headers=auth_header("jack-sub", "jack@example.com"))
+    assert me.status_code == 200
+
+
 def test_invite_sends_welcome_mail(client, commish_headers, app):
     sent: list[tuple] = []
 

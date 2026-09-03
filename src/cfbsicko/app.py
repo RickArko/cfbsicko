@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +18,14 @@ from pydantic import BaseModel, Field
 from cfbsicko.auth import AuthenticatedUser, check_local_password, get_auth_user, mint_local_token
 from cfbsicko.config import Config
 from cfbsicko.db import connect
+from cfbsicko.leagues import (
+    add_member,
+    create_league,
+    get_league,
+    list_leagues_for_user,
+    resolve_league_id,
+    update_league,
+)
 from cfbsicko.rate_limit import RateLimiter
 from cfbsicko.rules import PickSpec, PickValidationError
 from cfbsicko.store import (
@@ -77,6 +85,33 @@ class PicksIn(BaseModel):
 class InviteIn(BaseModel):
     email: str
     display_name: str | None = None
+    league_id: int | None = None
+
+
+class LeagueIn(BaseModel):
+    name: str
+    buy_in: int = 75
+    pot_first: float = 0.60
+    pot_second: float = 0.30
+    pot_third: float = 0.10
+    extra_owed: int = 75
+    bottom_n: int = 3
+
+
+class LeaguePatch(BaseModel):
+    name: str | None = None
+    buy_in: int | None = None
+    pot_first: float | None = None
+    pot_second: float | None = None
+    pot_third: float | None = None
+    extra_owed: int | None = None
+    bottom_n: int | None = None
+
+
+class LeagueMemberIn(BaseModel):
+    email: str
+    display_name: str | None = None
+    role: str = "player"
 
 
 class SlateIn(BaseModel):
@@ -160,6 +195,22 @@ def create_app(
             return user
         raise HTTPException(status_code=403, detail="Commissioner only")
 
+    def active_league(
+        user: dict[str, Any] = Depends(league_user),
+        x_league_id: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        requested = None
+        if x_league_id:
+            try:
+                requested = int(x_league_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Bad league id") from exc
+        try:
+            league_id = resolve_league_id(db(), user, requested)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="Not a member of that league") from exc
+        return get_league(db(), league_id)
+
     @app.middleware("http")
     async def canonical_host(request: Request, call_next):
         host = (request.headers.get("host") or "").split(":")[0].lower()
@@ -220,13 +271,19 @@ def create_app(
         return {"access_token": mint_local_token(email), "token_type": "bearer"}
 
     @app.get("/api/me")
-    def me(user: dict[str, Any] = Depends(league_user)):
+    def me(
+        user: dict[str, Any] = Depends(league_user),
+        league: dict[str, Any] = Depends(active_league),
+    ):
+        leagues = list_leagues_for_user(db(), user)
         return {
             "id": user["id"],
             "email": user["email"],
             "display_name": user["display_name"],
             "is_commish": bool(user["is_commish"]),
             "buy_in_paid": bool(user["buy_in_paid"]),
+            "league": league,
+            "leagues": leagues,
         }
 
     def _week_payload(week: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
@@ -292,14 +349,98 @@ def create_app(
         return {"week": week, "board": revealed}
 
     @app.get("/api/standings")
-    def get_standings(user: dict[str, Any] = Depends(league_user)):
-        return standings(db())
+    def get_standings(
+        user: dict[str, Any] = Depends(league_user),
+        league: dict[str, Any] = Depends(active_league),
+    ):
+        return standings(db(), league_id=int(league["id"]))
 
-    @app.post("/api/admin/invites")
-    def admin_invite(body: InviteIn, user: dict[str, Any] = Depends(commish)):
+    @app.get("/api/leagues")
+    def get_leagues(user: dict[str, Any] = Depends(league_user)):
+        return {"leagues": list_leagues_for_user(db(), user)}
+
+    @app.post("/api/admin/leagues")
+    def admin_create_league(body: LeagueIn, user: dict[str, Any] = Depends(commish)):
+        try:
+            return create_league(
+                db(),
+                name=body.name,
+                created_by=user["id"],
+                buy_in=body.buy_in,
+                pot_first=body.pot_first,
+                pot_second=body.pot_second,
+                pot_third=body.pot_third,
+                extra_owed=body.extra_owed,
+                bottom_n=body.bottom_n,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/admin/leagues/{league_id}")
+    def admin_patch_league(league_id: int, body: LeaguePatch, user: dict[str, Any] = Depends(commish)):
+        try:
+            return update_league(
+                db(),
+                league_id,
+                name=body.name,
+                buy_in=body.buy_in,
+                pot_first=body.pot_first,
+                pot_second=body.pot_second,
+                pot_third=body.pot_third,
+                extra_owed=body.extra_owed,
+                bottom_n=body.bottom_n,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="League not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/admin/leagues/{league_id}/members")
+    def admin_add_member(league_id: int, body: LeagueMemberIn, user: dict[str, Any] = Depends(commish)):
         from cfbsicko.mail import invite_body
 
-        invite = create_invite(db(), email=body.email, display_name=body.display_name, invited_by=user["id"])
+        try:
+            get_league(db(), league_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="League not found") from exc
+        invite = create_invite(
+            db(),
+            email=body.email,
+            display_name=body.display_name,
+            invited_by=user["id"],
+            league_id=league_id,
+        )
+        existing = db().execute("SELECT id FROM users WHERE email = ?", (invite["email"],)).fetchone()
+        if existing:
+            add_member(db(), league_id, int(existing["id"]), role=body.role)
+            db().commit()
+        subject, text = invite_body(
+            display_name=invite["display_name"],
+            app_url=Config.PUBLIC_APP_URL,
+        )
+        mailed = False
+        try:
+            _mail(invite["email"], subject, text)
+            mailed = True
+        except Exception:
+            mailed = False
+        return {"email": invite["email"], "display_name": invite["display_name"], "mailed": mailed}
+
+    @app.post("/api/admin/invites")
+    def admin_invite(
+        body: InviteIn,
+        user: dict[str, Any] = Depends(commish),
+        league: dict[str, Any] = Depends(active_league),
+    ):
+        from cfbsicko.mail import invite_body
+
+        invite = create_invite(
+            db(),
+            email=body.email,
+            display_name=body.display_name,
+            invited_by=user["id"],
+            league_id=body.league_id or int(league["id"]),
+        )
         subject, text = invite_body(
             display_name=invite["display_name"],
             app_url=Config.PUBLIC_APP_URL,
@@ -363,15 +504,23 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.patch("/api/admin/users/{user_id}")
-    def admin_user(user_id: int, body: PaidIn, user: dict[str, Any] = Depends(commish)):
+    def admin_user(
+        user_id: int,
+        body: PaidIn,
+        user: dict[str, Any] = Depends(commish),
+        league: dict[str, Any] = Depends(active_league),
+    ):
         try:
-            return set_paid(db(), user_id, body.buy_in_paid)
+            return set_paid(db(), user_id, body.buy_in_paid, league_id=int(league["id"]))
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail="User not found") from exc
 
     @app.get("/api/admin/users")
-    def admin_users(user: dict[str, Any] = Depends(commish)):
-        return {"users": list_users(db())}
+    def admin_users(
+        user: dict[str, Any] = Depends(commish),
+        league: dict[str, Any] = Depends(active_league),
+    ):
+        return {"users": list_users(db(), league_id=int(league["id"]))}
 
     @app.get("/api/admin/snapshots")
     def admin_snapshots(user: dict[str, Any] = Depends(commish)):

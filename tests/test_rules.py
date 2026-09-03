@@ -103,3 +103,7 @@ def test_standings_sort_and_payout_uses_paid_count():
     twelve = payout_preview(12)
     assert twelve.pot == 900
     assert twelve.first == 540
+    cheap = payout_preview(4, buy_in=50, extra_owed=25)
+    assert cheap.pot == 200
+    assert cheap.first == 120
+    assert cheap.extra_each_bottom == 25

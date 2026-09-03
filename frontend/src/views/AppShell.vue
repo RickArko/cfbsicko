@@ -7,6 +7,14 @@
         </router-link>
         <div class="nav-actions">
           <template v-if="token && me">
+            <select
+              v-if="me.leagues && me.leagues.length"
+              class="league-switch"
+              :value="leagueId || me.league?.id"
+              @change="switchLeague"
+            >
+              <option v-for="lg in me.leagues" :key="lg.id" :value="lg.id">{{ lg.name }}</option>
+            </select>
             <router-link to="/app">Picks</router-link>
             <router-link to="/app/standings">Standings</router-link>
             <router-link v-if="me.is_commish" to="/app/admin">Admin</router-link>
@@ -26,18 +34,19 @@
       <SignIn @authed="refresh" />
     </template>
     <p v-else-if="!me" class="wrap muted">Entering the league…</p>
-    <router-view v-else :token="token" :me="me" />
+    <router-view v-else :key="leagueId || me.league?.id" :token="token" :me="me" />
   </div>
 </template>
 
 <script setup>
 import { onMounted, ref } from "vue";
 import SignIn from "../components/SignIn.vue";
-import { api } from "../api.js";
+import { api, getLeagueId, setLeagueId } from "../api.js";
 import { getToken, hashAuthError, signOut } from "../session.js";
 
 const token = ref(null);
 const me = ref(null);
+const leagueId = ref(getLeagueId());
 const denied = ref("");
 const hashNote = ref("");
 
@@ -56,12 +65,22 @@ async function refresh() {
   }
   try {
     me.value = await api("/api/me", { token: token.value });
+    if (!leagueId.value && me.value.league?.id) {
+      leagueId.value = me.value.league.id;
+      setLeagueId(leagueId.value);
+    }
   } catch (exc) {
     denied.value =
       exc.status === 403
         ? "That email is not on this year’s list. Ask the commissioner."
         : exc.message;
   }
+}
+
+function switchLeague(event) {
+  const id = Number(event.target.value);
+  leagueId.value = id;
+  setLeagueId(id);
 }
 
 async function logout() {
