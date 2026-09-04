@@ -387,7 +387,11 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.patch("/api/admin/leagues/{league_id}")
-    def admin_patch_league(league_id: int, body: LeaguePatch, user: dict[str, Any] = Depends(commish)):
+    def admin_patch_league(
+        league_id: int, body: LeaguePatch, user: dict[str, Any] = Depends(commish)
+    ):
+        if not is_league_commish(db(), user, league_id):
+            raise HTTPException(status_code=403, detail="Commissioner only")
         try:
             return update_league(
                 db(),
