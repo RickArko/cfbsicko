@@ -22,6 +22,10 @@
         <div>
           <strong>{{ game.away }} at {{ game.home }}</strong>
           <div class="muted">{{ favorite(game) }} · O/U {{ game.total }}</div>
+          <div v-if="moved(game)" class="muted">Market now {{ marketLine(game) }} — lock stays the listed number.</div>
+          <div v-if="game.game_status" class="muted">
+            {{ game.game_status }}{{ scoreLine(game) }}
+          </div>
         </div>
         <div class="row">
           <button type="button" :class="selected(game, 'spread', 'away') ? '' : 'ghost'" :disabled="locked" @click="toggle(game, 'spread', 'away')">
@@ -45,6 +49,7 @@
         {{ saving ? "Saving…" : "Save picks" }}
       </button>
     </div>
+    <p v-if="pickResults.length" class="wrap muted">{{ pickResults }}</p>
     <p v-if="note" class="wrap muted">{{ note }}</p>
   </main>
 </template>
@@ -70,6 +75,14 @@ const visibleGames = computed(() =>
   dayFilter.value ? games.value.filter((g) => g.day_label === dayFilter.value) : games.value,
 );
 
+const savedPicks = ref([]);
+
+const pickResults = computed(() => {
+  const rows = savedPicks.value.filter((p) => p.result && p.result !== "pending");
+  if (!rows.length) return "";
+  return rows.map((p) => `${p.away || ""} ${p.result}`).join(" · ");
+});
+
 const countdown = computed(() => {
   if (!week.value?.lock_at) return "";
   const ms = new Date(week.value.lock_at).getTime() - now.value;
@@ -89,6 +102,19 @@ function awaySpread(game) {
 }
 function favorite(game) {
   return game.spread_home <= 0 ? `${game.home} ${game.spread_home}` : `${game.away} ${-game.spread_home}`;
+}
+function moved(game) {
+  const ms = game.market_spread_home;
+  const mt = game.market_total;
+  if (ms == null || mt == null) return false;
+  return Math.abs(ms - game.spread_home) >= 0.5 || Math.abs(mt - game.total) >= 0.5;
+}
+function marketLine(game) {
+  return `${favorite({ ...game, spread_home: game.market_spread_home })} · O/U ${game.market_total}`;
+}
+function scoreLine(game) {
+  if (game.away_score == null || game.home_score == null) return "";
+  return ` ${game.away_score}–${game.home_score}`;
 }
 function selected(game, market, side) {
   return picks.value.some((p) => p.game_id === game.id && p.market === market && p.side === side);
@@ -116,7 +142,8 @@ async function load() {
     week.value = data.week;
     games.value = data.games;
     locked.value = data.locked;
-    picks.value = (data.my_picks || []).map((p) => ({
+    savedPicks.value = data.my_picks || [];
+    picks.value = savedPicks.value.map((p) => ({
       game_id: p.game_id,
       market: p.market,
       side: p.side,
@@ -146,6 +173,7 @@ onMounted(() => {
   load();
   timer = setInterval(() => {
     now.value = Date.now();
+    load();
   }, 30000);
 });
 onUnmounted(() => clearInterval(timer));

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 import sqlite3
 from contextlib import asynccontextmanager
@@ -18,6 +20,7 @@ from pydantic import BaseModel, Field
 from cfbsicko.auth import AuthenticatedUser, check_local_password, get_auth_user, mint_local_token
 from cfbsicko.config import Config
 from cfbsicko.db import connect
+from cfbsicko.feed import EmptyFeed
 from cfbsicko.leagues import (
     add_member,
     create_league,
@@ -34,6 +37,7 @@ from cfbsicko.store import (
     InviteRequiredError,
     LockClosedError,
     NotFoundError,
+    SlateConflictError,
     board,
     create_invite,
     current_week,
@@ -53,7 +57,6 @@ from cfbsicko.store import (
     standings,
     update_week,
     upsert_invited_user,
-    users_missing_picks,
     week_is_writable,
     write_snapshot,
 )
@@ -126,6 +129,17 @@ class SlateIn(BaseModel):
     slate_text: str
     lock_at: str
     title: str | None = None
+    force: bool = False
+
+
+class IngestIn(BaseModel):
+    lock_at: str
+    title: str | None = None
+    force: bool = False
+
+
+class ProviderIdIn(BaseModel):
+    provider_game_id: str
 
 
 class WeekPatch(BaseModel):
@@ -155,23 +169,82 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
+async def _run_live_ticks(app: FastAPI) -> None:
+
+    last_odds = 0.0
+    last_scores = 0.0
+    while True:
+        try:
+            loop = asyncio.get_running_loop()
+            now_m = loop.time()
+            conn = getattr(app.state, "conn", None)
+            if conn is None:
+                app.state.conn = connect(app.state.db_path)
+                conn = app.state.conn
+
+            def _send(to: str, subject: str, body: str, html: str | None = None) -> str:
+                return _dispatch_mail(app, to, subject, body, html=html)
+
+            from cfbsicko.jobs import tick_jobs, tick_odds, tick_outbox, tick_scores
+
+            tick_jobs(conn, app.state.now_fn())
+            tick_outbox(conn, app.state.now_fn(), _send)
+            if now_m - last_odds >= 900:
+                tick_odds(conn, app.state.now_fn(), app.state.feed)
+                last_odds = now_m
+            if now_m - last_scores >= 60:
+                tick_scores(conn, app.state.now_fn(), app.state.feed)
+                last_scores = now_m
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(15)
+
+
+def _dispatch_mail(app: FastAPI, to: str, subject: str, body: str, html: str | None = None) -> str:
+    if app.state.mail_send is not None:
+        try:
+            return app.state.mail_send(to, subject, body, html=html)
+        except TypeError:
+            return app.state.mail_send(to, subject, body)
+    from cfbsicko.mail import send_mail
+
+    return send_mail(to, subject, body, html=html)
+
+
 def create_app(
     *,
     db_path: Path | None = None,
     now_fn=None,
     mail_send=None,
+    feed=None,
+    live_ticks: bool | None = None,
+    cron_token: str | None = None,
 ) -> FastAPI:
+    ticks_on = live_ticks if live_ticks is not None else now_fn is None
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        task = None
+        if ticks_on:
+            task = asyncio.create_task(_run_live_ticks(_app))
         yield
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         conn = getattr(_app.state, "conn", None)
         if conn is not None:
             conn.close()
+            _app.state.conn = None
 
     app = FastAPI(title="CFB Sicko", version="0.1.0", lifespan=lifespan)
     app.state.db_path = db_path or Config.database_path()
     app.state.now_fn = now_fn or _now_utc
     app.state.mail_send = mail_send
+    app.state.feed = feed if feed is not None else EmptyFeed()
+    app.state.cron_token = cron_token if cron_token is not None else Config.CRON_TOKEN
     app.state.limiter = RateLimiter()
     app.add_middleware(
         CORSMiddleware,
@@ -183,8 +256,13 @@ def create_app(
 
     def db() -> sqlite3.Connection:
         conn = getattr(app.state, "conn", None)
-        if conn is None:
-            app.state.conn = connect(app.state.db_path)
+        if conn is not None:
+            try:
+                conn.execute("SELECT 1")
+                return conn
+            except sqlite3.ProgrammingError:
+                pass
+        app.state.conn = connect(app.state.db_path)
         return app.state.conn
 
     def now() -> datetime:
@@ -295,6 +373,36 @@ def create_app(
             "league": league,
             "leagues": leagues,
         }
+
+    @app.get("/api/me/notifications")
+    def me_notifications(user: dict[str, Any] = Depends(league_user)):
+        from cfbsicko.jobs import list_notifications
+
+        return list_notifications(db(), int(user["id"]))
+
+    @app.post("/api/me/notifications/{notification_id}/read")
+    def me_notification_read(notification_id: int, user: dict[str, Any] = Depends(league_user)):
+        from cfbsicko.jobs import mark_notification_read
+
+        if not mark_notification_read(db(), int(user["id"]), notification_id):
+            raise HTTPException(status_code=404, detail="Notification not found")
+        return {"ok": True}
+
+    @app.post("/api/internal/tick")
+    def internal_tick(x_cron_token: str | None = Header(default=None, alias="X-Cron-Token")):
+        token = app.state.cron_token
+        if not token:
+            raise HTTPException(status_code=404, detail="Not found")
+        if x_cron_token != token:
+            raise HTTPException(status_code=403, detail="Bad cron token")
+        from cfbsicko.jobs import tick_all
+
+        return tick_all(
+            db(),
+            now(),
+            lambda to, subject, body, html=None: _dispatch_mail(app, to, subject, body, html=html),
+            feed=app.state.feed,
+        )
 
     def _week_payload(week: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         writable = week_is_writable(week, now())
@@ -486,10 +594,68 @@ def create_app(
                 slate_text=body.slate_text,
                 lock_at=body.lock_at,
                 title=body.title,
+                force=body.force,
             )
+        except SlateConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"week": week, "games": list_games(db(), week["id"])}
+
+    @app.post("/api/admin/weeks/{week_no}/ingest")
+    def admin_ingest(week_no: int, body: IngestIn, user: dict[str, Any] = Depends(commish)):
+        from cfbsicko.jobs import ingest_draft
+
+        games = app.state.feed.slate(Config.SEASON, week_no)
+        try:
+            week = ingest_draft(
+                db(),
+                week_no=week_no,
+                games=games,
+                lock_at=body.lock_at,
+                title=body.title,
+                force=body.force,
+            )
+        except SlateConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"week": week, "games": list_games(db(), week["id"])}
+
+    @app.post("/api/admin/weeks/{week_no}/freeze")
+    def admin_freeze(week_no: int, user: dict[str, Any] = Depends(commish)):
+        from cfbsicko.jobs import freeze_week, tick_outbox
+
+        try:
+            week = freeze_week(db(), week_no, feed=app.state.feed)
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Week not found") from exc
+        tick_outbox(
+            db(),
+            now(),
+            lambda to, subject, body, html=None: _dispatch_mail(app, to, subject, body, html=html),
+        )
+        return {"week": week, "games": list_games(db(), week["id"])}
+
+    @app.patch("/api/admin/games/{game_id}/provider")
+    def admin_provider(game_id: int, body: ProviderIdIn, user: dict[str, Any] = Depends(commish)):
+        from cfbsicko.jobs import set_provider_game_id
+
+        set_provider_game_id(db(), game_id, body.provider_game_id)
+        return {"ok": True}
+
+    @app.get("/api/admin/live")
+    def admin_live(user: dict[str, Any] = Depends(commish)):
+        from cfbsicko.jobs import outbox_failures, unmatched_games
+
+        week = current_week(db())
+        if week is None:
+            return {"week": None, "unmatched": [], "outbox_failures": outbox_failures(db())}
+        return {
+            "week": week,
+            "unmatched": unmatched_games(db(), int(week["id"])),
+            "outbox_failures": outbox_failures(db()),
+        }
 
     @app.patch("/api/admin/weeks/{week_no}")
     def admin_week_patch(week_no: int, body: WeekPatch, user: dict[str, Any] = Depends(commish)):
@@ -553,11 +719,16 @@ def create_app(
             raise HTTPException(status_code=404, detail="Snapshot not found") from exc
 
     def _mail(to: str, subject: str, body: str) -> str:
-        if app.state.mail_send is not None:
-            return app.state.mail_send(to, subject, body)
-        from cfbsicko.mail import send_mail
+        return _dispatch_mail(app, to, subject, body)
 
-        return send_mail(to, subject, body)
+    def _flush_outbox() -> int:
+        from cfbsicko.jobs import tick_outbox
+
+        return tick_outbox(
+            db(),
+            now(),
+            lambda to, subject, body, html=None: _dispatch_mail(app, to, subject, body, html=html),
+        )
 
     @app.post("/api/admin/weeks/{week_no}/mail/slate")
     def admin_mail_slate(
@@ -565,16 +736,13 @@ def create_app(
         user: dict[str, Any] = Depends(commish),
         league: dict[str, Any] = Depends(active_league),
     ):
-        from cfbsicko.mail import slate_published_body
+        from cfbsicko.jobs import enqueue_slate_mail
 
         week = get_week(db(), week_no)
-        subject, body = slate_published_body(
-            week_title=week["title"], lock_at=week["lock_at"], app_url=Config.PUBLIC_APP_URL
-        )
-        sent = []
-        for email in list_invited_emails(db(), league_id=int(league["id"])):
-            sent.append({"to": email, "delivery": _mail(email, subject, body)})
-        return {"sent": len(sent)}
+        queued = enqueue_slate_mail(db(), week, league_id=int(league["id"]))
+        db().commit()
+        _flush_outbox()
+        return {"sent": queued}
 
     @app.post("/api/admin/weeks/{week_no}/mail/reminder")
     def admin_mail_reminder(
@@ -582,22 +750,13 @@ def create_app(
         user: dict[str, Any] = Depends(commish),
         league: dict[str, Any] = Depends(active_league),
     ):
-        from cfbsicko.mail import lock_reminder_body
+        from cfbsicko.jobs import enqueue_lock_warnings
 
         week = get_week(db(), week_no)
-        sent = 0
-        for row in users_missing_picks(db(), week["id"], league_id=int(league["id"])):
-            if not row["email"]:
-                continue
-            subject, body = lock_reminder_body(
-                week_title=week["title"],
-                lock_at=week["lock_at"],
-                have=int(row["n"]),
-                app_url=Config.PUBLIC_APP_URL,
-            )
-            _mail(row["email"], subject, body)
-            sent += 1
-        return {"sent": sent}
+        queued = enqueue_lock_warnings(db(), week)
+        db().commit()
+        _flush_outbox()
+        return {"sent": queued}
 
     @app.post("/api/admin/weeks/{week_no}/mail/standings")
     def admin_mail_standings(

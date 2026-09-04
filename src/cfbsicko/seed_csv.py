@@ -209,9 +209,15 @@ def seed_from_csv(seed_dir: Path, db_path: Path, *, force: bool = False) -> Seed
                 )
                 pick_count += 1
 
+            from cfbsicko.jobs import copy_freeze_overlay, schedule_lock_jobs
             from cfbsicko.leagues import sync_default_league_members
+            from cfbsicko.store import get_week
 
             sync_default_league_members(conn)
+            copy_freeze_overlay(conn, week_id)
+            seeded = get_week(conn, week_no, season)
+            if seeded.get("status") == "open":
+                schedule_lock_jobs(conn, seeded)
 
         return SeedResult(
             users=len(user_ids),
