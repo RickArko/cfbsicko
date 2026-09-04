@@ -230,16 +230,20 @@ def line_moved_body(
     return subject, body
 
 
+def _signed_spread(value: float) -> str:
+    return f"{value:+g}" if value != 0 else "0"
+
+
 def _pick_line(row: dict) -> str:
     if row.get("market") == "total":
         side = "Over" if row.get("side") == "over" else "Under"
         return f"{row.get('away')}/{row.get('home')} {side} {row.get('total')}"
-    if row.get("side") == "home":
-        n = row.get("spread_home")
-        return f"{row.get('home')} {n}"
     n = row.get("spread_home")
-    shown = -float(n) if n is not None else ""
-    return f"{row.get('away')} {shown}"
+    if n is None:
+        return f"{row.get('home') if row.get('side') == 'home' else row.get('away')}"
+    if row.get("side") == "home":
+        return f"{row.get('home')} {_signed_spread(float(n))}"
+    return f"{row.get('away')} {_signed_spread(-float(n))}"
 
 
 def standings_body(*, week_title: str, table_text: str, app_url: str) -> tuple[str, str]:

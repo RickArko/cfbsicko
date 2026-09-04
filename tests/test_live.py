@@ -292,3 +292,158 @@ def test_ingest_refuses_week_with_picks(imported, clock, commish_headers):
 def test_empty_cron_is_404(client):
     r = client.post("/api/internal/tick", headers={"X-Cron-Token": "x"})
     assert r.status_code == 404
+
+
+def test_migrate_live_adds_locked_at_to_existing_outbox(tmp_path):
+    import sqlite3
+
+    from cfbsicko.live import migrate_live
+
+    conn = sqlite3.connect(tmp_path / "legacy-outbox.db")
+    conn.executescript(
+        """
+        CREATE TABLE games (id INTEGER PRIMARY KEY);
+        CREATE TABLE game_results (game_id INTEGER PRIMARY KEY);
+        CREATE TABLE scheduled_jobs (
+            id INTEGER PRIMARY KEY,
+            week_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            run_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            locked_at TEXT,
+            last_error TEXT
+        );
+        CREATE TABLE mail_outbox (
+            id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL,
+            week_id INTEGER,
+            league_id INTEGER,
+            to_email TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            send_after TEXT NOT NULL,
+            sent_at TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT
+        );
+        """
+    )
+    migrate_live(conn)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(mail_outbox)")}
+    conn.close()
+    assert "locked_at" in cols
+
+
+def test_tick_jobs_claims_once_across_connections(imported, clock):
+    import threading
+
+    from cfbsicko.db import connect
+    from cfbsicko.jobs import tick_jobs
+
+    setup = connect(imported)
+    week_id = int(setup.execute("SELECT id FROM weeks ORDER BY id LIMIT 1").fetchone()[0])
+    setup.execute("DELETE FROM scheduled_jobs")
+    setup.execute(
+        "INSERT INTO scheduled_jobs (week_id, kind, run_at, status) VALUES (?, 'lock_snapshot', ?, 'pending')",
+        (week_id, (clock["now"] - timedelta(minutes=1)).isoformat()),
+    )
+    setup.commit()
+    setup.close()
+
+    ran = [0, 0]
+    barrier = threading.Barrier(2)
+
+    def worker(idx: int) -> None:
+        conn = connect(imported)
+        barrier.wait()
+        ran[idx] = tick_jobs(conn, clock["now"])
+        conn.close()
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sum(ran) == 1
+    check = connect(imported)
+    row = check.execute(
+        "SELECT attempts, status FROM scheduled_jobs WHERE week_id = ? AND kind = 'lock_snapshot'",
+        (week_id,),
+    ).fetchone()
+    check.close()
+    assert row["attempts"] == 1
+    assert row["status"] == "done"
+
+
+def test_tick_outbox_claim_blocks_reentrant_send(imported, clock):
+    import json
+
+    from cfbsicko.db import connect
+    from cfbsicko.jobs import tick_outbox
+
+    conn = connect(imported)
+    week_id = int(conn.execute("SELECT id FROM weeks ORDER BY id LIMIT 1").fetchone()[0])
+    payload = json.dumps({"subject": "probe", "body": "once"})
+    conn.execute(
+        """
+        INSERT INTO mail_outbox (kind, week_id, to_email, payload_json, dedupe_key, send_after)
+        VALUES ('review_probe', ?, 'probe@example.com', ?, 'probe', ?)
+        """,
+        (week_id, payload, (clock["now"] - timedelta(minutes=1)).isoformat()),
+    )
+    conn.commit()
+    sent: list[str] = []
+
+    def send(to, subject, body, html=None):
+        sent.append(to)
+        assert tick_outbox(conn, clock["now"], send) == 0
+        return "smtp"
+
+    assert tick_outbox(conn, clock["now"], send) == 1
+    assert sent == ["probe@example.com"]
+    row = conn.execute("SELECT sent_at, locked_at FROM mail_outbox WHERE dedupe_key = 'probe'").fetchone()
+    conn.close()
+    assert row["sent_at"] is not None
+    assert row["locked_at"] is None
+
+
+def test_pick_line_keeps_plus_on_dog():
+    from cfbsicko.mail import lineup_saved_body
+
+    away_dog = [
+        {
+            "market": "spread",
+            "side": "away",
+            "away": "SMU",
+            "home": "Florida State",
+            "spread_home": -3.5,
+        }
+    ]
+    _, body = lineup_saved_body(week_title="Week 2", before=[], after=away_dog, app_url="http://t")
+    assert "SMU +3.5" in body
+
+    home_dog = [
+        {
+            "market": "spread",
+            "side": "home",
+            "away": "Houston",
+            "home": "Oklahoma",
+            "spread_home": 3.5,
+        }
+    ]
+    _, home_body = lineup_saved_body(week_title="Week 2", before=[], after=home_dog, app_url="http://t")
+    assert "Oklahoma +3.5" in home_body
+
+    favorite = [
+        {
+            "market": "spread",
+            "side": "home",
+            "away": "SMU",
+            "home": "Florida State",
+            "spread_home": -3.5,
+        }
+    ]
+    _, fav_body = lineup_saved_body(week_title="Week 2", before=[], after=favorite, app_url="http://t")
+    assert "Florida State -3.5" in fav_body

@@ -250,10 +250,17 @@ def tick_jobs(conn: sqlite3.Connection, now: datetime) -> int:
     for row in rows:
         if _parse_when(row["run_at"]) > now:
             continue
-        conn.execute(
-            "UPDATE scheduled_jobs SET locked_at = ?, attempts = attempts + 1 WHERE id = ?",
+        claimed = conn.execute(
+            """
+            UPDATE scheduled_jobs
+            SET locked_at = ?, attempts = attempts + 1
+            WHERE id = ? AND status = 'pending' AND locked_at IS NULL
+            """,
             (now.isoformat(), row["id"]),
         )
+        if claimed.rowcount != 1:
+            continue
+        conn.commit()
         try:
             _run_job(conn, dict(row), now)
             conn.execute(
@@ -295,7 +302,7 @@ def tick_outbox(conn: sqlite3.Connection, now: datetime, send: SendFn) -> int:
     rows = conn.execute(
         """
         SELECT * FROM mail_outbox
-        WHERE sent_at IS NULL AND attempts < ?
+        WHERE sent_at IS NULL AND locked_at IS NULL AND attempts < ?
         ORDER BY id
         LIMIT ?
         """,
@@ -305,6 +312,17 @@ def tick_outbox(conn: sqlite3.Connection, now: datetime, send: SendFn) -> int:
     for row in rows:
         if _parse_when(row["send_after"]) > now:
             continue
+        claimed = conn.execute(
+            """
+            UPDATE mail_outbox
+            SET locked_at = ?
+            WHERE id = ? AND sent_at IS NULL AND locked_at IS NULL
+            """,
+            (now.isoformat(), row["id"]),
+        )
+        if claimed.rowcount != 1:
+            continue
+        conn.commit()
         payload = json.loads(row["payload_json"])
         try:
             try:
@@ -312,7 +330,11 @@ def tick_outbox(conn: sqlite3.Connection, now: datetime, send: SendFn) -> int:
             except TypeError:
                 send(row["to_email"], payload["subject"], payload["body"])
             conn.execute(
-                "UPDATE mail_outbox SET sent_at = ?, last_error = NULL WHERE id = ?",
+                """
+                UPDATE mail_outbox
+                SET sent_at = ?, last_error = NULL, locked_at = NULL
+                WHERE id = ?
+                """,
                 (now.isoformat(), row["id"]),
             )
             sent += 1
@@ -322,7 +344,8 @@ def tick_outbox(conn: sqlite3.Connection, now: datetime, send: SendFn) -> int:
             nxt = now + timedelta(minutes=delay)
             conn.execute(
                 """
-                UPDATE mail_outbox SET attempts = ?, send_after = ?, last_error = ?
+                UPDATE mail_outbox
+                SET attempts = ?, send_after = ?, last_error = ?, locked_at = NULL
                 WHERE id = ?
                 """,
                 (attempts, nxt.isoformat(), str(exc)[:500], row["id"]),

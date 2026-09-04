@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import sqlite3
 from contextlib import asynccontextmanager
@@ -60,6 +61,8 @@ from cfbsicko.store import (
     week_is_writable,
     write_snapshot,
 )
+
+log = logging.getLogger("cfbsicko.ticks")
 
 
 def _frontend_dist() -> Path | None:
@@ -198,7 +201,7 @@ async def _run_live_ticks(app: FastAPI) -> None:
         except asyncio.CancelledError:
             raise
         except Exception:
-            pass
+            log.exception("live tick failed")
         await asyncio.sleep(15)
 
 

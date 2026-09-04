@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS mail_outbox (
     sent_at TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
+    locked_at TEXT,
     UNIQUE (kind, week_id, to_email, dedupe_key)
 );
 
@@ -98,6 +99,8 @@ def migrate_live(conn: sqlite3.Connection) -> None:
     _add_columns(conn, "games", GAME_COLUMNS)
     _add_columns(conn, "game_results", RESULT_COLUMNS)
     conn.executescript(LIVE_TABLES)
+    _add_columns(conn, "mail_outbox", (("locked_at", "TEXT"),))
     conn.execute(
         "UPDATE scheduled_jobs SET locked_at = NULL WHERE status = 'pending' AND locked_at IS NOT NULL"
     )
+    conn.execute("UPDATE mail_outbox SET locked_at = NULL WHERE sent_at IS NULL AND locked_at IS NOT NULL")

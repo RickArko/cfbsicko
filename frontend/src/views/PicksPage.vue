@@ -76,6 +76,7 @@ const visibleGames = computed(() =>
 );
 
 const savedPicks = ref([]);
+const lastSynced = ref([]);
 
 const pickResults = computed(() => {
   const rows = savedPicks.value.filter((p) => p.result && p.result !== "pending");
@@ -119,6 +120,17 @@ function scoreLine(game) {
 function selected(game, market, side) {
   return picks.value.some((p) => p.game_id === game.id && p.market === market && p.side === side);
 }
+function pickKey(p) {
+  return `${p.game_id}:${p.market}:${p.side}`;
+}
+function samePicks(a, b) {
+  if (a.length !== b.length) return false;
+  const keys = new Set(a.map(pickKey));
+  return b.every((p) => keys.has(pickKey(p)));
+}
+function draftDirty() {
+  return !samePicks(picks.value, lastSynced.value);
+}
 function toggle(game, market, side) {
   const idx = picks.value.findIndex((p) => p.game_id === game.id && p.market === market);
   if (idx >= 0 && picks.value[idx].side === side) {
@@ -136,18 +148,22 @@ function toggle(game, market, side) {
   picks.value.push({ game_id: game.id, market, side });
 }
 
-async function load() {
+async function load({ force = false } = {}) {
   try {
     const data = await api("/api/weeks/current", { token: props.token });
     week.value = data.week;
     games.value = data.games;
     locked.value = data.locked;
     savedPicks.value = data.my_picks || [];
-    picks.value = savedPicks.value.map((p) => ({
+    const incoming = savedPicks.value.map((p) => ({
       game_id: p.game_id,
       market: p.market,
       side: p.side,
     }));
+    if (force || !draftDirty()) {
+      picks.value = incoming.map((p) => ({ ...p }));
+      lastSynced.value = incoming.map((p) => ({ ...p }));
+    }
   } catch (exc) {
     loadError.value = exc.message;
   }
@@ -161,7 +177,9 @@ async function save() {
       picks: picks.value.map((p, i) => ({ ...p, slot: i + 1 })),
     };
     await api("/api/weeks/current/picks", { method: "PUT", token: props.token, body });
+    lastSynced.value = picks.value.map((p) => ({ ...p }));
     note.value = "Saved.";
+    await load({ force: true });
   } catch (exc) {
     note.value = typeof exc.data?.detail === "string" ? exc.data.detail : exc.message;
   } finally {
@@ -170,7 +188,7 @@ async function save() {
 }
 
 onMounted(() => {
-  load();
+  load({ force: true });
   timer = setInterval(() => {
     now.value = Date.now();
     load();
