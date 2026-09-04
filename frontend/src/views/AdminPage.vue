@@ -1,6 +1,23 @@
 <template>
   <main class="wrap">
     <h1>Commissioner</h1>
+    <p class="muted">{{ currentLeagueName }} · same Tuesday slate, own pot and standings.</p>
+    <section class="card" style="margin-bottom: 1rem">
+      <h2>New league</h2>
+      <form class="row" @submit.prevent="createLeague">
+        <label class="sr-only" for="lg-name">League name</label>
+        <input id="lg-name" v-model="lgName" required placeholder="Office pool" />
+        <label for="lg-buy-in">Buy-in $</label>
+        <input
+          id="lg-buy-in"
+          v-model.number="lgBuyIn"
+          type="number"
+          min="1"
+          style="max-width: 6rem"
+        />
+        <button type="submit">Create</button>
+      </form>
+    </section>
     <section class="card" style="margin-bottom: 1rem">
       <h2>Invite</h2>
       <form class="row" @submit.prevent="invite">
@@ -52,12 +69,16 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from "vue";
+import { onMounted, reactive, ref, watch } from "vue";
 import { api } from "../api.js";
 
 const props = defineProps({ token: String, me: Object });
+const emit = defineEmits(["league-changed"]);
 const invEmail = ref("");
 const invName = ref("");
+const lgName = ref("");
+const lgBuyIn = ref(75);
+const currentLeagueName = ref("CFB Sicko");
 const weekNo = ref(2);
 const lockAt = ref("2026-09-10T18:00:00-04:00");
 const slate = ref("");
@@ -85,15 +106,29 @@ async function load() {
   }
   users.value = (await api("/api/admin/users", auth())).users;
   snapshots.value = (await api("/api/admin/snapshots", auth())).snapshots;
+  if (props.me?.league?.name) currentLeagueName.value = props.me.league.name;
+}
+
+async function createLeague() {
+  const created = await api("/api/admin/leagues", {
+    method: "POST",
+    token: props.token,
+    body: { name: lgName.value, buy_in: lgBuyIn.value },
+  });
+  note.value = `Created ${created.name} ($${created.buy_in}). Switched to it — invite and mark paid here.`;
+  lgName.value = "";
+  emit("league-changed", created.id);
 }
 
 async function invite() {
-  await api("/api/admin/invites", {
+  const r = await api("/api/admin/invites", {
     method: "POST",
     token: props.token,
     body: { email: invEmail.value, display_name: invName.value || null },
   });
-  note.value = `Invited ${invEmail.value}`;
+  note.value = r.mailed
+    ? `Invited ${invEmail.value} — welcome mail sent.`
+    : `Invited ${invEmail.value} (mail did not send).`;
   invEmail.value = "";
 }
 
@@ -145,6 +180,13 @@ async function download(s) {
   a.download = `cfbsicko-week-${s.week_id}-${s.kind}.json`;
   a.click();
 }
+
+watch(
+  () => props.me?.league?.name,
+  (name) => {
+    if (name) currentLeagueName.value = name;
+  },
+);
 
 onMounted(load);
 </script>

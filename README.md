@@ -7,14 +7,18 @@ Private college-football locks league for [cfbsicko.com](https://cfbsicko.com). 
 ```bash
 make bootstrap
 make test
-# Import Week 1 from the exported sheet (uses ~/.cfbsicko/locks.db):
-uv run cfbsicko import-sheet "data/assets/CFB Locks MASTER SHEET 2026.xlsx"
+# Week 1 CSVs (what Fly uses). xlsx stays on the laptop:
+make seed-csv
+# Optional: rebuild CSVs from a local sheet export
+# make extract-sheet
 make run
 ```
 
 Copy `.env.example` → `.env` and fill the dedicated Supabase project keys. Never point `DATABASE_PATH` at `~/.cfb_data/cfb.db`.
 
-Week 1 import maps Scout’s `ILL/UAB Over 57.5` onto the frozen Illinois/UAB total **54.5** and prints a warning. The published line wins.
+`make invite-review` / `make invite-blast` read `CFBSICKO_TRIAL_ROSTER` (`email|Name` pairs) or `~/.cfbsicko/trial_roster.txt`. The blast puts the commissioner on To and everyone else on Bcc.
+
+The sheet had Scout’s `ILL/UAB Over 57.5`; the frozen Illinois/UAB total is **54.5**. Extract rewrites the stored pick to `UAB/Illinois Over 54.5` so the board and the grader use the same number.
 
 ## Deploy
 

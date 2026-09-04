@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="CFB Sicko. Five locks. One Thursday.">
+  <defs>
+    <radialGradient id="gold" cx="88%" cy="8%" r="55%">
+      <stop offset="0%" stop-color="#c8a24a" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#c8a24a" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="green" cx="8%" cy="18%" r="50%">
+      <stop offset="0%" stop-color="#3d9b6e" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#3d9b6e" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#0c1210"/>
+  <rect width="1200" height="630" fill="url(#gold)"/>
+  <rect width="1200" height="630" fill="url(#green)"/>
+  <text x="80" y="150" fill="#c8a24a" font-family="Georgia, Palatino, serif" font-size="22" font-weight="700" letter-spacing="4">CFB SICKO</text>
+  <text x="80" y="280" fill="#e8efe6" font-family="Georgia, Palatino, serif" font-size="72" font-weight="700">Five locks.</text>
+  <text x="80" y="364" fill="#e8efe6" font-family="Georgia, Palatino, serif" font-size="72" font-weight="700">One Thursday.</text>
+  <text x="80" y="448" fill="#c8a24a" font-family="Georgia, Palatino, serif" font-size="56" font-weight="700">No spreadsheet.</text>
+  <text x="80" y="540" fill="#8a9a8e" font-family="Georgia, Palatino, serif" font-size="24">Private college football locks league  2026</text>
+</svg>

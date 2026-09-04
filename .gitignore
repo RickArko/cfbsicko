@@ -24,6 +24,8 @@ backups/
 !.ai/plans/
 .ai/plans/*
 !.ai/plans/build.md
+!.ai/plans/auth-prod.md
+!.ai/plans/weekly-lines.md
 .cursor/plans/*
 artifacts/
 .tmp*

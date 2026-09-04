@@ -10,9 +10,11 @@ FLY_PUBLIC_URL ?= https://cfbsicko.fly.dev
 SEASON ?= 2026
 
 .PHONY: bootstrap run test lint fmt supabase.check \
+	invite-review invite-blast \
 	fly.app fly.volume fly.secrets fly.test-login fly.test-login-off \
 	fly.deploy fly.status fly.logs fly.certs \
-	fly.db-backup fly.db-backup-verify fly.db-restore import-sheet
+	fly.db-backup fly.db-backup-verify fly.db-restore import-sheet \
+	extract-sheet seed-csv fly.seed-csv
 
 bootstrap: ## uv sync + .env from example
 	$(UV) sync --group dev
@@ -33,8 +35,27 @@ fmt:
 	$(UV) run ruff check --fix src tests scripts
 	$(UV) run ruff format src tests scripts
 
+invite-review: ## Send the group signup draft to the commissioner only
+	$(UV) run cfbsicko invite-group --review
+
+invite-blast: ## Send the reviewed group signup to the trial roster
+	$(UV) run cfbsicko invite-group --blast --i-reviewed
+
+SEED_DIR ?= seeds/2026/week-01
+SHEET ?= data/assets/CFB Locks MASTER SHEET 2026.xlsx
+
 import-sheet:
-	$(UV) run cfbsicko import-sheet "data/assets/CFB Locks MASTER SHEET 2026.xlsx"
+	$(UV) run cfbsicko import-sheet "$(SHEET)"
+
+extract-sheet:
+	$(UV) run cfbsicko extract-sheet "$(SHEET)" --out "$(SEED_DIR)"
+
+seed-csv:
+	$(UV) run cfbsicko seed-csv "$(SEED_DIR)"
+
+fly.seed-csv:
+	FLY_APP="$(FLY_APP)" FLY_BIN="$(FLY)" SEED_DIR="$(SEED_DIR)" \
+		bash scripts/fly_seed_csv.sh
 
 supabase.check:
 	$(UV) run python scripts/check_supabase.py

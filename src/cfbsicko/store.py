@@ -94,19 +94,24 @@ def upsert_invited_user(conn: sqlite3.Connection, auth: AuthenticatedUser) -> di
         (auth.user_id, email),
     ).fetchone()
     commish = email in Config.commish_emails()
-    invite = conn.execute("SELECT * FROM invites WHERE email = ?", (email,)).fetchone()
+    invites = [dict(row) for row in conn.execute("SELECT * FROM invites WHERE email = ?", (email,))]
+    named_invite = next((row for row in invites if row.get("display_name")), invites[0] if invites else None)
 
-    if existing is None and invite is None and not commish:
+    if existing is None and not invites and not commish:
         raise InviteRequiredError("email is not invited")
 
     if existing is None:
-        display = invite["display_name"] if invite and invite["display_name"] else email.split("@")[0]
+        display = (
+            named_invite["display_name"]
+            if named_invite and named_invite["display_name"]
+            else email.split("@")[0]
+        )
         # Link a sheet-imported display-name row when the invite carries that name.
         named = None
-        if invite and invite["display_name"]:
+        if named_invite and named_invite["display_name"]:
             named = conn.execute(
                 "SELECT * FROM users WHERE display_name = ? AND supabase_user_id IS NULL",
-                (invite["display_name"],),
+                (named_invite["display_name"],),
             ).fetchone()
         if named:
             conn.execute(
@@ -137,8 +142,25 @@ def upsert_invited_user(conn: sqlite3.Connection, auth: AuthenticatedUser) -> di
         )
         user_id = existing["id"]
 
-    if invite and invite["accepted_at"] is None:
-        conn.execute("UPDATE invites SET accepted_at = datetime('now') WHERE id = ?", (invite["id"],))
+    from cfbsicko.leagues import add_member, default_league_id, sync_default_league_members
+
+    sync_default_league_members(conn)
+    add_member(conn, default_league_id(conn), int(user_id), role="commish" if commish else "player")
+    for invite in invites:
+        if invite.get("accepted_at") is None:
+            conn.execute("UPDATE invites SET accepted_at = datetime('now') WHERE id = ?", (invite["id"],))
+        lid = invite.get("league_id")
+        if not lid:
+            continue
+        invite_role = invite.get("role") or "player"
+        if invite_role not in {"player", "commish"}:
+            invite_role = "player"
+        add_member(
+            conn,
+            int(lid),
+            int(user_id),
+            role="commish" if commish else invite_role,
+        )
     conn.commit()
     row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     assert row is not None
@@ -151,24 +173,38 @@ def create_invite(
     email: str,
     display_name: str | None,
     invited_by: int | None,
+    league_id: int | None = None,
+    role: str = "player",
 ) -> dict[str, Any]:
+    from cfbsicko.leagues import add_member, default_league_id
+
     email_n = email.strip().lower()
+    if role not in {"player", "commish"}:
+        raise ValueError("role must be player or commish")
+    league_id = default_league_id(conn) if league_id is None else int(league_id)
     token = secrets.token_urlsafe(24)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     conn.execute(
         """
-        INSERT INTO invites (email, display_name, token_hash, invited_by)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(email) DO UPDATE SET
+        INSERT INTO invites (email, display_name, token_hash, invited_by, league_id, role)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(email, league_id) DO UPDATE SET
             display_name = excluded.display_name,
             token_hash = excluded.token_hash,
             invited_by = excluded.invited_by,
+            role = excluded.role,
             accepted_at = NULL
         """,
-        (email_n, display_name, token_hash, invited_by),
+        (email_n, display_name, token_hash, invited_by, league_id, role),
     )
+    existing = conn.execute("SELECT id FROM users WHERE email = ?", (email_n,)).fetchone()
+    if existing:
+        add_member(conn, league_id, int(existing["id"]), role=role)
     conn.commit()
-    row = conn.execute("SELECT * FROM invites WHERE email = ?", (email_n,)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM invites WHERE email = ? AND league_id = ?",
+        (email_n, league_id),
+    ).fetchone()
     assert row is not None
     payload = dict(row)
     payload["token"] = token
@@ -417,29 +453,62 @@ def override_pick(
     return after
 
 
-def set_paid(conn: sqlite3.Connection, user_id: int, paid: bool) -> dict[str, Any]:
-    conn.execute("UPDATE users SET buy_in_paid = ? WHERE id = ?", (1 if paid else 0, user_id))
+def set_paid(
+    conn: sqlite3.Connection, user_id: int, paid: bool, *, league_id: int | None = None
+) -> dict[str, Any]:
+    from cfbsicko.leagues import default_league_id
+
+    league_id = league_id or default_league_id(conn)
+    member = conn.execute(
+        "SELECT 1 FROM league_members WHERE league_id = ? AND user_id = ?",
+        (league_id, user_id),
+    ).fetchone()
+    if member is None:
+        raise NotFoundError("user")
+    conn.execute(
+        "UPDATE league_members SET buy_in_paid = ? WHERE league_id = ? AND user_id = ?",
+        (1 if paid else 0, league_id, user_id),
+    )
+    default_id = default_league_id(conn)
+    if league_id == default_id:
+        conn.execute("UPDATE users SET buy_in_paid = ? WHERE id = ?", (1 if paid else 0, user_id))
     conn.commit()
-    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    row = conn.execute(
+        """
+        SELECT u.id, u.display_name, u.email, u.is_commish, m.buy_in_paid, m.role
+        FROM users u
+        JOIN league_members m ON m.user_id = u.id
+        WHERE u.id = ? AND m.league_id = ?
+        """,
+        (user_id, league_id),
+    ).fetchone()
     if row is None:
         raise NotFoundError("user")
     return dict(row)
 
 
-def standings(conn: sqlite3.Connection, season: int | None = None) -> dict[str, Any]:
+def standings(
+    conn: sqlite3.Connection, season: int | None = None, *, league_id: int | None = None
+) -> dict[str, Any]:
+    from cfbsicko.leagues import default_league_id, get_league
+
     season = season or Config.SEASON
+    league_id = league_id or default_league_id(conn)
+    league = get_league(conn, league_id)
     rows = conn.execute(
         """
-        SELECT u.id AS user_id, u.display_name, u.buy_in_paid,
+        SELECT u.id AS user_id, u.display_name, m.buy_in_paid,
                COALESCE(SUM(wr.wins), 0) AS wins,
                COALESCE(SUM(wr.ties), 0) AS ties,
                COALESCE(SUM(wr.losses), 0) AS losses
-        FROM users u
+        FROM league_members m
+        JOIN users u ON u.id = m.user_id
         LEFT JOIN week_records wr ON wr.user_id = u.id
         LEFT JOIN weeks w ON w.id = wr.week_id AND w.season = ?
+        WHERE m.league_id = ?
         GROUP BY u.id
         """,
-        (season,),
+        (season, league_id),
     ).fetchall()
     records = [
         WeeklyRecord(
@@ -460,13 +529,21 @@ def standings(conn: sqlite3.Connection, season: int | None = None) -> dict[str, 
         FROM week_records wr
         JOIN users u ON u.id = wr.user_id
         JOIN weeks w ON w.id = wr.week_id
+        JOIN league_members m ON m.user_id = u.id AND m.league_id = ?
         WHERE w.season = ?
         ORDER BY w.week_no, u.display_name
         """,
-        (season,),
+        (league_id, season),
     ).fetchall()
+    payout = payout_preview(
+        paid,
+        buy_in=int(league["buy_in"]),
+        shares=(float(league["pot_first"]), float(league["pot_second"]), float(league["pot_third"])),
+        extra_owed=int(league["extra_owed"]),
+    )
     return {
         "season": season,
+        "league": league,
         "table": [
             {
                 "rank": idx + 1,
@@ -481,7 +558,7 @@ def standings(conn: sqlite3.Connection, season: int | None = None) -> dict[str, 
             for idx, r in enumerate(ranked)
         ],
         "weekly": [dict(row) for row in weekly],
-        "payout": payout_preview(paid).__dict__,
+        "payout": {**payout.__dict__, "buy_in": int(league["buy_in"]), "bottom_n": int(league["bottom_n"])},
     }
 
 
@@ -550,29 +627,64 @@ def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> dict[str, Any]:
     }
 
 
-def users_missing_picks(conn: sqlite3.Connection, week_id: int) -> list[dict[str, Any]]:
+def users_missing_picks(
+    conn: sqlite3.Connection, week_id: int, *, league_id: int | None = None
+) -> list[dict[str, Any]]:
+    from cfbsicko.leagues import default_league_id
+
+    league_id = league_id or default_league_id(conn)
     rows = conn.execute(
         """
         SELECT u.id, u.display_name, u.email, COUNT(p.id) AS n
         FROM users u
+        JOIN league_members m ON m.user_id = u.id AND m.league_id = ?
         LEFT JOIN picks p ON p.user_id = u.id AND p.week_id = ?
         GROUP BY u.id
         HAVING n < 5
         ORDER BY u.display_name
         """,
-        (week_id,),
+        (league_id, week_id),
     ).fetchall()
     return [dict(row) for row in rows]
 
 
-def list_users(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def list_users(conn: sqlite3.Connection, *, league_id: int | None = None) -> list[dict[str, Any]]:
+    from cfbsicko.leagues import default_league_id
+
+    league_id = league_id or default_league_id(conn)
     return [
         dict(r)
         for r in conn.execute(
-            "SELECT id, display_name, email, is_commish, buy_in_paid FROM users ORDER BY display_name"
+            """
+            SELECT u.id, u.display_name, u.email, u.is_commish, m.buy_in_paid, m.role
+            FROM users u
+            JOIN league_members m ON m.user_id = u.id
+            WHERE m.league_id = ?
+            ORDER BY u.display_name
+            """,
+            (league_id,),
         )
     ]
 
 
-def list_invited_emails(conn: sqlite3.Connection) -> list[str]:
-    return [r["email"] for r in conn.execute("SELECT email FROM users WHERE email IS NOT NULL")]
+def list_invited_emails(conn: sqlite3.Connection, *, league_id: int | None = None) -> list[str]:
+    from cfbsicko.leagues import default_league_id
+
+    league_id = league_id or default_league_id(conn)
+    rows = conn.execute(
+        """
+        SELECT email FROM (
+            SELECT u.email AS email
+            FROM users u
+            JOIN league_members m ON m.user_id = u.id
+            WHERE m.league_id = ? AND u.email IS NOT NULL
+            UNION
+            SELECT i.email
+            FROM invites i
+            WHERE i.email IS NOT NULL AND COALESCE(i.league_id, ?) = ?
+        )
+        ORDER BY email
+        """,
+        (league_id, default_league_id(conn), league_id),
+    )
+    return [r["email"] for r in rows]

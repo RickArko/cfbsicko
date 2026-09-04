@@ -116,8 +116,12 @@ def write_sheet(sheet: MasterSheet, db_path: Path, *, season: int = 2026) -> Imp
                     )
                     pick_count += 1
 
-        if unmapped:
-            raise UnmappedPicksError(tuple(unmapped), tuple(warnings))
+            if unmapped:
+                raise UnmappedPicksError(tuple(unmapped), tuple(warnings))
+
+            from cfbsicko.leagues import sync_default_league_members
+
+            sync_default_league_members(conn)
 
         return ImportResult(
             users=len(sheet.players),
