@@ -90,6 +90,33 @@ def test_seed_refuses_existing_week_without_force(tmp_path):
     assert again.picks == 50
 
 
+def test_seed_rejects_blank_and_unknown_players(tmp_path):
+    src = tmp_path / "bad-players"
+    src.mkdir()
+    for name in ("week.csv", "games.csv"):
+        (src / name).write_text((COMMITTED / name).read_text(), encoding="utf-8")
+    (src / "picks.csv").write_text(
+        "display_name,slot,away,home,market,side,raw_text\n",
+        encoding="utf-8",
+    )
+    (src / "players.csv").write_text("display_name\n   \nStu\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing display_name"):
+        seed_from_csv(src, tmp_path / "blank.db")
+
+    (src / "players.csv").write_text("display_name\nStu\nstu\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate player"):
+        seed_from_csv(src, tmp_path / "dup.db")
+
+    (src / "players.csv").write_text("display_name\nStu\n", encoding="utf-8")
+    (src / "picks.csv").write_text(
+        "display_name,slot,away,home,market,side,raw_text\n"
+        "NotStu,1,Indiana State,Purdue,total,under,Purdue/ISU Under 57.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"not in players\.csv"):
+        seed_from_csv(src, tmp_path / "unknown.db")
+
+
 def test_seed_rejects_malformed_picks(tmp_path):
     src = tmp_path / "bad"
     src.mkdir()

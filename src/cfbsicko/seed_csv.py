@@ -82,7 +82,7 @@ def extract_sheet_to_csv(xlsx_path: Path, out_dir: Path, *, season: int = 2026) 
             )
     if unmapped:
         raise ValueError("Unmapped picks:\n" + "\n".join(unmapped))
-    _validate_seed_rows(game_rows, pick_rows)
+    _validate_seed_rows(game_rows, pick_rows, player_rows)
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(out_dir / "week.csv", WEEK_FIELDS, week_rows)
     _write_csv(out_dir / "games.csv", GAME_FIELDS, game_rows)
@@ -106,7 +106,7 @@ def seed_from_csv(seed_dir: Path, db_path: Path, *, force: bool = False) -> Seed
     picks = _read_csv(seed_dir / "picks.csv")
     if not games:
         raise ValueError(f"{seed_dir / 'games.csv'} has no games")
-    _validate_seed_rows(games, picks)
+    _validate_seed_rows(games, picks, players)
 
     season = int(week["season"])
     week_no = int(week["week_no"])
@@ -171,7 +171,7 @@ def seed_from_csv(seed_dir: Path, db_path: Path, *, force: bool = False) -> Seed
 
             user_ids: dict[str, int] = {}
             for row in players:
-                name = row["display_name"]
+                name = (row["display_name"] or "").strip()
                 existing = conn.execute("SELECT id FROM users WHERE display_name = ?", (name,)).fetchone()
                 if existing is None:
                     cur = conn.execute("INSERT INTO users (display_name) VALUES (?)", (name,))
@@ -191,12 +191,7 @@ def seed_from_csv(seed_dir: Path, db_path: Path, *, force: bool = False) -> Seed
                     raise ValueError(f"pick references missing game {key}")
                 user_id = user_ids.get(row["display_name"])
                 if user_id is None:
-                    cur = conn.execute(
-                        "INSERT INTO users (display_name) VALUES (?)",
-                        (row["display_name"],),
-                    )
-                    user_id = int(cur.lastrowid)
-                    user_ids[row["display_name"]] = user_id
+                    raise ValueError(f"pick owner {row['display_name']!r} is not in players.csv")
                 conn.execute(
                     """
                     INSERT INTO picks (user_id, week_id, slot, game_id, market, side, raw_text)
@@ -277,7 +272,23 @@ def _frozen_raw_text(raw: str, market: str, side: str, game: SlateGame) -> str:
     return f"{team} {listed:+g}"
 
 
-def _validate_seed_rows(games: list[dict[str, str]], picks: list[dict[str, str]]) -> None:
+def _validated_player_names(players: list[dict[str, str]]) -> dict[str, str]:
+    roster: dict[str, str] = {}
+    for idx, row in enumerate(players):
+        name = (row.get("display_name") or "").strip()
+        if not name:
+            raise ValueError(f"players.csv row {idx + 1} is missing display_name")
+        key = name.casefold()
+        if key in roster:
+            raise ValueError(f"duplicate player {name!r}")
+        roster[key] = name
+        row["display_name"] = name
+    return roster
+
+
+def _validate_seed_rows(
+    games: list[dict[str, str]], picks: list[dict[str, str]], players: list[dict[str, str]]
+) -> None:
     game_ids: dict[tuple[str, str], int] = {}
     for idx, row in enumerate(games):
         away = (row.get("away") or "").strip()
@@ -294,9 +305,15 @@ def _validate_seed_rows(games: list[dict[str, str]], picks: list[dict[str, str]]
         if key in game_ids:
             raise ValueError(f"duplicate game {away} at {home}")
         game_ids[key] = idx + 1
+    roster = _validated_player_names(players)
     by_player: dict[str, list[PickSpec]] = defaultdict(list)
     for row in picks:
         name = (row.get("display_name") or "").strip()
+        canon = roster.get(name.casefold())
+        if canon is None:
+            raise ValueError(f"pick owner {name!r} is not in players.csv")
+        name = canon
+        row["display_name"] = name
         key = ((row.get("away") or "").strip(), (row.get("home") or "").strip())
         if key not in game_ids:
             raise ValueError(f"pick references missing game {key}")

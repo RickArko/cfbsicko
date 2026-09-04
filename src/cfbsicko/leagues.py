@@ -43,6 +43,9 @@ def migrate_leagues(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(invites)")}
     if "league_id" not in cols:
         conn.execute("ALTER TABLE invites ADD COLUMN league_id INTEGER")
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(invites)")}
+    if "role" not in cols:
+        conn.execute("ALTER TABLE invites ADD COLUMN role TEXT NOT NULL DEFAULT 'player'")
     league_id = _ensure_default_league(conn)
     sync_default_league_members(conn, league_id)
 
@@ -119,6 +122,14 @@ def list_leagues_for_user(conn: sqlite3.Connection, user: dict[str, Any]) -> lis
     return [dict(r) for r in rows]
 
 
+def get_membership(conn: sqlite3.Connection, league_id: int, user_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM league_members WHERE league_id = ? AND user_id = ?",
+        (league_id, user_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def is_member(conn: sqlite3.Connection, league_id: int, user_id: int) -> bool:
     row = conn.execute(
         "SELECT 1 FROM league_members WHERE league_id = ? AND user_id = ?",
@@ -167,6 +178,9 @@ def _validated_league_settings(
         raise ValueError("league name is required")
     if buy_in < 1:
         raise ValueError("buy_in must be at least 1")
+    for share, label in ((pot_first, "pot_first"), (pot_second, "pot_second"), (pot_third, "pot_third")):
+        if share < 0 or share > 1:
+            raise ValueError(f"{label} must be between 0 and 1")
     if abs((pot_first + pot_second + pot_third) - 1.0) > 0.001:
         raise ValueError("payout shares must sum to 1")
     if bottom_n < 0:

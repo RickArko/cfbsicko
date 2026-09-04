@@ -35,7 +35,13 @@
       <SignIn @authed="refresh" />
     </template>
     <p v-else-if="!me" class="wrap muted">Entering the league…</p>
-    <router-view v-else :key="leagueId || me.league?.id" :token="token" :me="me" />
+    <router-view
+      v-else
+      :key="leagueId || me.league?.id"
+      :token="token"
+      :me="me"
+      @league-changed="onLeagueChanged"
+    />
   </div>
 </template>
 
@@ -96,10 +102,16 @@ async function refresh() {
   }
 }
 
-function switchLeague(event) {
-  const id = Number(event.target.value);
-  leagueId.value = id;
-  setLeagueId(id);
+async function onLeagueChanged(id) {
+  const n = Number(id);
+  if (!Number.isFinite(n) || n < 1) return;
+  leagueId.value = n;
+  setLeagueId(n);
+  await refresh();
+}
+
+async function switchLeague(event) {
+  await onLeagueChanged(event.target.value);
 }
 
 async function logout() {

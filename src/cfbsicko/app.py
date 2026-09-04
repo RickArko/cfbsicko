@@ -22,6 +22,7 @@ from cfbsicko.leagues import (
     add_member,
     create_league,
     get_league,
+    get_membership,
     list_leagues_for_user,
     resolve_league_id,
     update_league,
@@ -112,6 +113,11 @@ class LeagueMemberIn(BaseModel):
     email: str
     display_name: str | None = None
     role: str = "player"
+
+    def validated_role(self) -> str:
+        if self.role not in {"player", "commish"}:
+            raise ValueError("role must be player or commish")
+        return self.role
 
 
 class SlateIn(BaseModel):
@@ -276,12 +282,13 @@ def create_app(
         league: dict[str, Any] = Depends(active_league),
     ):
         leagues = list_leagues_for_user(db(), user)
+        member = get_membership(db(), int(league["id"]), int(user["id"]))
         return {
             "id": user["id"],
             "email": user["email"],
             "display_name": user["display_name"],
             "is_commish": bool(user["is_commish"]),
-            "buy_in_paid": bool(user["buy_in_paid"]),
+            "buy_in_paid": bool(member["buy_in_paid"]) if member else False,
             "league": league,
             "leagues": leagues,
         }
@@ -401,18 +408,22 @@ def create_app(
 
         try:
             get_league(db(), league_id)
+            role = body.validated_role()
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="League not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         invite = create_invite(
             db(),
             email=body.email,
             display_name=body.display_name,
             invited_by=user["id"],
             league_id=league_id,
+            role=role,
         )
         existing = db().execute("SELECT id FROM users WHERE email = ?", (invite["email"],)).fetchone()
         if existing:
-            add_member(db(), league_id, int(existing["id"]), role=body.role)
+            add_member(db(), league_id, int(existing["id"]), role=role)
             db().commit()
         subject, text = invite_body(
             display_name=invite["display_name"],

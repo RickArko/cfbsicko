@@ -144,11 +144,14 @@ def upsert_invited_user(conn: sqlite3.Connection, auth: AuthenticatedUser) -> di
     sync_default_league_members(conn)
     add_member(conn, default_league_id(conn), int(user_id), role="commish" if commish else "player")
     if invite and invite["league_id"]:
+        invite_role = dict(invite).get("role") or "player"
+        if invite_role not in {"player", "commish"}:
+            invite_role = "player"
         add_member(
             conn,
             int(invite["league_id"]),
             int(user_id),
-            role="commish" if commish else "player",
+            role="commish" if commish else invite_role,
         )
     conn.commit()
     row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -163,29 +166,33 @@ def create_invite(
     display_name: str | None,
     invited_by: int | None,
     league_id: int | None = None,
+    role: str = "player",
 ) -> dict[str, Any]:
     email_n = email.strip().lower()
+    if role not in {"player", "commish"}:
+        raise ValueError("role must be player or commish")
     token = secrets.token_urlsafe(24)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     conn.execute(
         """
-        INSERT INTO invites (email, display_name, token_hash, invited_by, league_id)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO invites (email, display_name, token_hash, invited_by, league_id, role)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(email) DO UPDATE SET
             display_name = excluded.display_name,
             token_hash = excluded.token_hash,
             league_id = excluded.league_id,
             invited_by = excluded.invited_by,
+            role = excluded.role,
             accepted_at = NULL
         """,
-        (email_n, display_name, token_hash, invited_by, league_id),
+        (email_n, display_name, token_hash, invited_by, league_id, role),
     )
     if league_id is not None:
         existing = conn.execute("SELECT id FROM users WHERE email = ?", (email_n,)).fetchone()
         if existing:
             from cfbsicko.leagues import add_member
 
-            add_member(conn, league_id, int(existing["id"]))
+            add_member(conn, league_id, int(existing["id"]), role=role)
     conn.commit()
     row = conn.execute("SELECT * FROM invites WHERE email = ?", (email_n,)).fetchone()
     assert row is not None

@@ -46,6 +46,12 @@ def test_second_league_own_buy_in_and_roster(client, commish_headers):
     assert isolated["league"]["id"] == side["id"]
     assert isolated["payout"]["buy_in"] == 50
     assert isolated["payout"]["pot"] == 50
+    me_side = client.get("/api/me", headers={**stu, "X-League-Id": str(side["id"])}).json()
+    assert me_side["league"]["id"] == side["id"]
+    assert me_side["buy_in_paid"] is True
+    me_default = client.get("/api/me", headers=stu).json()
+    assert me_default["league"]["slug"] == "cfbsicko"
+    assert me_default["buy_in_paid"] is False
     names = {row["display_name"] for row in isolated["table"]}
     assert "Stu" in names
     assert names != {row["display_name"] for row in default["table"]} or len(isolated["table"]) < len(
@@ -75,6 +81,66 @@ def test_site_admin_email_is_commish(client, monkeypatch):
     finally:
         monkeypatch.setenv("COMMISH_ALLOWED_EMAILS", "commish@example.com")
         reload_config()
+
+
+def test_league_rejects_negative_payout_share(client, commish_headers):
+    created = client.post(
+        "/api/admin/leagues",
+        json={"name": "Bad shares", "buy_in": 50, "pot_first": -0.1, "pot_second": 0.6, "pot_third": 0.5},
+        headers=commish_headers,
+    )
+    assert created.status_code == 400
+    ok = client.post(
+        "/api/admin/leagues",
+        json={"name": "Ok shares", "buy_in": 50},
+        headers=commish_headers,
+    )
+    assert ok.status_code == 200, ok.text
+    patched = client.patch(
+        f"/api/admin/leagues/{ok.json()['id']}",
+        json={"pot_first": -0.1, "pot_second": 0.6, "pot_third": 0.5},
+        headers=commish_headers,
+    )
+    assert patched.status_code == 400
+
+
+def test_add_member_rejects_invalid_role_and_persists_commish(client, commish_headers, app):
+    created = client.post(
+        "/api/admin/leagues",
+        json={"name": "Side pot", "buy_in": 50},
+        headers=commish_headers,
+    )
+    assert created.status_code == 200, created.text
+    side = created.json()
+    bad = client.post(
+        f"/api/admin/leagues/{side['id']}/members",
+        json={"email": "ghost@example.com", "display_name": "Ghost", "role": "owner"},
+        headers=commish_headers,
+    )
+    assert bad.status_code == 400
+    add = client.post(
+        f"/api/admin/leagues/{side['id']}/members",
+        json={"email": "co@example.com", "display_name": "Co", "role": "commish"},
+        headers=commish_headers,
+    )
+    assert add.status_code == 200, add.text
+    me = client.get("/api/me", headers=auth_header("co-sub", "co@example.com"))
+    assert me.status_code == 200, me.text
+    from cfbsicko.db import connect
+
+    conn = connect(app.state.db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT m.role FROM league_members m
+            JOIN users u ON u.id = m.user_id
+            WHERE u.email = ? AND m.league_id = ?
+            """,
+            ("co@example.com", side["id"]),
+        ).fetchone()
+        assert row["role"] == "commish"
+    finally:
+        conn.close()
 
 
 def test_patch_league_rejects_empty_name_and_zero_buy_in(client, commish_headers):
