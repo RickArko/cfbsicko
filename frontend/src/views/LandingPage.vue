@@ -44,12 +44,12 @@
         <article class="locks-card card" aria-hidden="true">
           <div class="locks-card-head">
             <strong>Week 1</strong>
-            <span class="pill pulse">Open · 18h to lock</span>
+            <span class="pill pulse">Sample card</span>
           </div>
-          <p class="muted locks-card-lede">Exactly five. Spreads or totals.</p>
+          <p class="muted locks-card-lede">Exactly five. Spreads or totals. Example only.</p>
           <ul class="lock-slots">
             <li>Houston −20.5</li>
-            <li>Purdue / Iowa State Under 57.5</li>
+            <li>Indiana State / Purdue Under 57.5</li>
             <li>Washington State +23.5</li>
             <li class="empty">Lock 4</li>
             <li class="empty">Lock 5</li>

@@ -209,9 +209,9 @@ def seed_from_csv(seed_dir: Path, db_path: Path, *, force: bool = False) -> Seed
                 )
                 pick_count += 1
 
-        from cfbsicko.leagues import sync_default_league_members
+            from cfbsicko.leagues import sync_default_league_members
 
-        sync_default_league_members(conn)
+            sync_default_league_members(conn)
 
         return SeedResult(
             users=len(user_ids),

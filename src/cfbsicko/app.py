@@ -23,6 +23,7 @@ from cfbsicko.leagues import (
     create_league,
     get_league,
     get_membership,
+    is_league_commish,
     list_leagues_for_user,
     resolve_league_id,
     update_league,
@@ -195,12 +196,6 @@ def create_app(
         except InviteRequiredError as exc:
             raise HTTPException(status_code=403, detail="Invite required") from exc
 
-    def commish(user: dict[str, Any] = Depends(league_user)) -> dict[str, Any]:
-        email = (user.get("email") or "").lower()
-        if user.get("is_commish") or email in Config.commish_emails():
-            return user
-        raise HTTPException(status_code=403, detail="Commissioner only")
-
     def active_league(
         user: dict[str, Any] = Depends(league_user),
         x_league_id: str | None = Header(default=None),
@@ -216,6 +211,14 @@ def create_app(
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail="Not a member of that league") from exc
         return get_league(db(), league_id)
+
+    def commish(
+        user: dict[str, Any] = Depends(league_user),
+        league: dict[str, Any] = Depends(active_league),
+    ) -> dict[str, Any]:
+        if is_league_commish(db(), user, int(league["id"])):
+            return user
+        raise HTTPException(status_code=403, detail="Commissioner only")
 
     @app.middleware("http")
     async def canonical_host(request: Request, call_next):
@@ -287,7 +290,7 @@ def create_app(
             "id": user["id"],
             "email": user["email"],
             "display_name": user["display_name"],
-            "is_commish": bool(user["is_commish"]),
+            "is_commish": is_league_commish(db(), user, int(league["id"])),
             "buy_in_paid": bool(member["buy_in_paid"]) if member else False,
             "league": league,
             "leagues": leagues,

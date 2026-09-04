@@ -64,11 +64,11 @@ def test_site_admin_email_is_commish(client, monkeypatch):
 
     monkeypatch.setenv(
         "COMMISH_ALLOWED_EMAILS",
-        "commish@example.com,stuartmfeeley@gmail.com",
+        "commish@example.com,second-commish@example.com",
     )
     reload_config()
     try:
-        headers = auth_header("stuart-sub", "stuartmfeeley@gmail.com")
+        headers = auth_header("stuart-sub", "second-commish@example.com")
         me = client.get("/api/me", headers=headers)
         assert me.status_code == 200, me.text
         assert me.json()["is_commish"] is True
@@ -236,3 +236,96 @@ def test_standings_mail_uses_active_league_only(client, commish_headers, app):
     bodies = "\n".join(item[2] for item in sent)
     assert "SideOnly" in bodies
     assert "MainOnly" not in bodies
+
+
+def test_second_invite_keeps_first_league_membership(client, commish_headers, app):
+    created = client.post(
+        "/api/admin/leagues",
+        json={"name": "Side pot", "buy_in": 50},
+        headers=commish_headers,
+    )
+    assert created.status_code == 200, created.text
+    side = created.json()
+    invite(client, commish_headers, "both@example.com", "Both")
+    add = client.post(
+        f"/api/admin/leagues/{side['id']}/members",
+        json={"email": "both@example.com", "display_name": "Both"},
+        headers=commish_headers,
+    )
+    assert add.status_code == 200, add.text
+    me = client.get("/api/me", headers=auth_header("both-sub", "both@example.com"))
+    assert me.status_code == 200, me.text
+    ids = {row["id"] for row in me.json()["leagues"]}
+    assert me.json()["league"]["slug"] == "cfbsicko"
+    assert side["id"] in ids
+    from cfbsicko.db import connect
+
+    conn = connect(app.state.db_path)
+    try:
+        rows = conn.execute(
+            "SELECT league_id FROM invites WHERE email = ? ORDER BY league_id",
+            ("both@example.com",),
+        ).fetchall()
+        assert [int(row["league_id"]) for row in rows] == sorted(
+            {int(me.json()["league"]["id"]), int(side["id"])}
+        )
+    finally:
+        conn.close()
+
+
+def test_invited_league_commish_can_admin_that_league(client, commish_headers):
+    created = client.post(
+        "/api/admin/leagues",
+        json={"name": "Side pot", "buy_in": 50},
+        headers=commish_headers,
+    )
+    assert created.status_code == 200, created.text
+    side = created.json()
+    add = client.post(
+        f"/api/admin/leagues/{side['id']}/members",
+        json={"email": "co@example.com", "display_name": "Co", "role": "commish"},
+        headers=commish_headers,
+    )
+    assert add.status_code == 200, add.text
+    co = auth_header("co-sub", "co@example.com")
+    default_me = client.get("/api/me", headers=co)
+    assert default_me.status_code == 200, default_me.text
+    assert default_me.json()["is_commish"] is False
+    side_headers = {**co, "X-League-Id": str(side["id"])}
+    side_me = client.get("/api/me", headers=side_headers)
+    assert side_me.status_code == 200, side_me.text
+    assert side_me.json()["is_commish"] is True
+    named = client.patch(
+        f"/api/admin/leagues/{side['id']}",
+        json={"name": "Co pot"},
+        headers=side_headers,
+    )
+    assert named.status_code == 200, named.text
+    assert named.json()["name"] == "Co pot"
+    forbidden = client.patch(
+        f"/api/admin/leagues/{side['id']}",
+        json={"name": "Nope"},
+        headers=co,
+    )
+    assert forbidden.status_code == 403
+
+
+def test_league_rejects_negative_extra_owed(client, commish_headers):
+    created = client.post(
+        "/api/admin/leagues",
+        json={"name": "Neg extra", "buy_in": 50, "extra_owed": -1},
+        headers=commish_headers,
+    )
+    assert created.status_code == 400
+    ok = client.post(
+        "/api/admin/leagues",
+        json={"name": "Ok extra", "buy_in": 50, "extra_owed": 0},
+        headers=commish_headers,
+    )
+    assert ok.status_code == 200, ok.text
+    patched = client.patch(
+        f"/api/admin/leagues/{ok.json()['id']}",
+        json={"extra_owed": -5},
+        headers=commish_headers,
+    )
+    assert patched.status_code == 400

@@ -47,7 +47,58 @@ def migrate_leagues(conn: sqlite3.Connection) -> None:
     if "role" not in cols:
         conn.execute("ALTER TABLE invites ADD COLUMN role TEXT NOT NULL DEFAULT 'player'")
     league_id = _ensure_default_league(conn)
+    _migrate_invites_per_league(conn, league_id)
     sync_default_league_members(conn, league_id)
+
+
+def _unique_index_column_sets(conn: sqlite3.Connection, table: str) -> list[tuple[str, ...]]:
+    sets: list[tuple[str, ...]] = []
+    for idx in conn.execute(f"PRAGMA index_list({table})"):
+        unique = idx["unique"] if isinstance(idx, sqlite3.Row) else idx[2]
+        name = idx["name"] if isinstance(idx, sqlite3.Row) else idx[1]
+        if not unique:
+            continue
+        cols = tuple(
+            info["name"] if isinstance(info, sqlite3.Row) else info[2]
+            for info in conn.execute(f"PRAGMA index_info({name})")
+        )
+        if cols:
+            sets.append(cols)
+    return sets
+
+
+def _migrate_invites_per_league(conn: sqlite3.Connection, league_id: int) -> None:
+    """One pending invite per email+league. UNIQUE(email) overwrote side-league seats."""
+    uniques = _unique_index_column_sets(conn, "invites")
+    if ("email", "league_id") in uniques:
+        return
+    conn.execute("UPDATE invites SET league_id = ? WHERE league_id IS NULL", (league_id,))
+    conn.executescript(
+        """
+        CREATE TABLE invites_per_league (
+            id INTEGER PRIMARY KEY,
+            email TEXT NOT NULL,
+            display_name TEXT,
+            token_hash TEXT NOT NULL,
+            invited_by INTEGER REFERENCES users(id),
+            accepted_at TEXT,
+            expires_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            league_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'player',
+            UNIQUE (email, league_id)
+        );
+        INSERT INTO invites_per_league (
+            id, email, display_name, token_hash, invited_by, accepted_at,
+            expires_at, created_at, league_id, role
+        )
+        SELECT id, email, display_name, token_hash, invited_by, accepted_at,
+            expires_at, created_at, league_id, COALESCE(role, 'player')
+        FROM invites;
+        DROP TABLE invites;
+        ALTER TABLE invites_per_league RENAME TO invites;
+        """
+    )
 
 
 def _ensure_default_league(conn: sqlite3.Connection) -> int:
@@ -130,6 +181,14 @@ def get_membership(conn: sqlite3.Connection, league_id: int, user_id: int) -> di
     return dict(row) if row else None
 
 
+def is_league_commish(conn: sqlite3.Connection, user: dict[str, Any], league_id: int) -> bool:
+    email = (user.get("email") or "").strip().lower()
+    if user.get("is_commish") or email in Config.commish_emails():
+        return True
+    member = get_membership(conn, league_id, int(user["id"]))
+    return bool(member and member.get("role") == "commish")
+
+
 def is_member(conn: sqlite3.Connection, league_id: int, user_id: int) -> bool:
     row = conn.execute(
         "SELECT 1 FROM league_members WHERE league_id = ? AND user_id = ?",
@@ -171,13 +230,16 @@ def _validated_league_settings(
     pot_first: float,
     pot_second: float,
     pot_third: float,
+    extra_owed: int,
     bottom_n: int,
-) -> tuple[str, int, float, float, float, int]:
+) -> tuple[str, int, float, float, float, int, int]:
     name = name.strip()
     if not name:
         raise ValueError("league name is required")
     if buy_in < 1:
         raise ValueError("buy_in must be at least 1")
+    if extra_owed < 0:
+        raise ValueError("extra_owed must be >= 0")
     for share, label in ((pot_first, "pot_first"), (pot_second, "pot_second"), (pot_third, "pot_third")):
         if share < 0 or share > 1:
             raise ValueError(f"{label} must be between 0 and 1")
@@ -185,7 +247,7 @@ def _validated_league_settings(
         raise ValueError("payout shares must sum to 1")
     if bottom_n < 0:
         raise ValueError("bottom_n must be >= 0")
-    return name, buy_in, pot_first, pot_second, pot_third, bottom_n
+    return name, buy_in, pot_first, pot_second, pot_third, extra_owed, bottom_n
 
 
 def create_league(
@@ -201,12 +263,13 @@ def create_league(
     bottom_n: int = 3,
     season: int | None = None,
 ) -> dict[str, Any]:
-    name, buy_in, pot_first, pot_second, pot_third, bottom_n = _validated_league_settings(
+    name, buy_in, pot_first, pot_second, pot_third, extra_owed, bottom_n = _validated_league_settings(
         name=name,
         buy_in=buy_in,
         pot_first=pot_first,
         pot_second=pot_second,
         pot_third=pot_third,
+        extra_owed=extra_owed,
         bottom_n=bottom_n,
     )
     season = season or Config.SEASON
@@ -248,15 +311,15 @@ def update_league(
     bottom_n: int | None = None,
 ) -> dict[str, Any]:
     current = get_league(conn, league_id)
-    name, buy_in, pot_first, pot_second, pot_third, bottom_n = _validated_league_settings(
+    name, buy_in, pot_first, pot_second, pot_third, extra_owed, bottom_n = _validated_league_settings(
         name=current["name"] if name is None else name,
         buy_in=current["buy_in"] if buy_in is None else buy_in,
         pot_first=current["pot_first"] if pot_first is None else pot_first,
         pot_second=current["pot_second"] if pot_second is None else pot_second,
         pot_third=current["pot_third"] if pot_third is None else pot_third,
+        extra_owed=current["extra_owed"] if extra_owed is None else extra_owed,
         bottom_n=current["bottom_n"] if bottom_n is None else bottom_n,
     )
-    extra_owed = current["extra_owed"] if extra_owed is None else extra_owed
     conn.execute(
         """
         UPDATE leagues SET name = ?, buy_in = ?, pot_first = ?, pot_second = ?, pot_third = ?,

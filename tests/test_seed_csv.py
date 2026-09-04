@@ -77,6 +77,10 @@ def test_committed_week1_seed(tmp_path):
         assert scout["side"] == "over"
         assert "54.5" in scout["raw_text"]
         assert "57.5" not in scout["raw_text"]
+        members = conn.execute("SELECT COUNT(*) AS n FROM league_members").fetchone()["n"]
+        users = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+        assert members == users
+        assert members >= 12
     finally:
         conn.close()
 
