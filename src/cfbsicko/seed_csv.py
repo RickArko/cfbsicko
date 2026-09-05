@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import csv
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 from cfbsicko.db import connect, transaction
-from cfbsicko.parse import SlateGame, map_picks_to_slate, parse_slate
+from cfbsicko.parse import SlateGame, map_picks_to_slate, parse_pick_text, parse_slate
 from cfbsicko.rules import PickSpec, PickValidationError, default_week1_lock, validate_pick_set
 
 WEEK_FIELDS = ("season", "week_no", "title", "lock_at", "status")
@@ -89,6 +90,110 @@ def extract_sheet_to_csv(xlsx_path: Path, out_dir: Path, *, season: int = 2026) 
     _write_csv(out_dir / "players.csv", PLAYER_FIELDS, player_rows)
     _write_csv(out_dir / "picks.csv", PICK_FIELDS, pick_rows)
     return out_dir
+
+
+_GLUED_SPREAD = re.compile(r"(?<!\s)([+-]\d+(?:\.\d+)?)\s*$")
+_ROW_LABEL = re.compile(r"^pick\s*\d+$", re.IGNORECASE)
+
+
+def slate_games_from_rows(games: list[dict[str, str]]) -> list[SlateGame]:
+    out: list[SlateGame] = []
+    for row in games:
+        spread_home = float(row["spread_home"])
+        if spread_home <= 0:
+            favorite = row["home"]
+            spread = spread_home
+        else:
+            favorite = row["away"]
+            spread = -spread_home
+        out.append(
+            SlateGame(
+                away=row["away"],
+                home=row["home"],
+                favorite=favorite,
+                spread=spread,
+                total=float(row["total"]),
+                day_label=row.get("day_label") or "Saturday",
+            )
+        )
+    return out
+
+
+def _normalize_wide_raw(raw: str) -> str:
+    text = " ".join(raw.strip().split())
+    if not text or _ROW_LABEL.match(text):
+        return ""
+    if parse_pick_text(text) is not None:
+        return text
+    glued = _GLUED_SPREAD.sub(r" \1", text)
+    return glued if glued != text else text
+
+
+def extract_wide_picks(
+    wide_path: Path,
+    games: list[dict[str, str]],
+    players: list[dict[str, str]],
+) -> list[dict[str, object]]:
+    roster = _validated_player_names([dict(row) for row in players])
+    slate = slate_games_from_rows(games)
+    with wide_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise ValueError(f"{wide_path} is empty") from exc
+        names = [(cell or "").strip() for cell in header]
+        columns: list[tuple[int, str]] = []
+        for idx, name in enumerate(names):
+            if not name:
+                continue
+            canon = roster.get(name.casefold())
+            if canon is None:
+                raise ValueError(f"wide column {name!r} is not in players.csv")
+            columns.append((idx, canon))
+        by_player: dict[str, list[str]] = {canon: [] for _, canon in columns}
+        for row in reader:
+            for idx, canon in columns:
+                if idx >= len(row):
+                    continue
+                raw = _normalize_wide_raw(row[idx])
+                if raw:
+                    by_player[canon].append(raw)
+    pick_rows: list[dict[str, object]] = []
+    unmapped: list[str] = []
+    for name, raws in by_player.items():
+        if not raws:
+            continue
+        report = map_picks_to_slate(raws, slate)
+        if report.unmapped:
+            unmapped.extend(f"{name}: {raw}" for raw in report.unmapped)
+            continue
+        for slot, mapped in enumerate(report.mapped, start=1):
+            game = slate[mapped.game_index]
+            pick_rows.append(
+                {
+                    "display_name": name,
+                    "slot": slot,
+                    "away": game.away,
+                    "home": game.home,
+                    "market": mapped.market,
+                    "side": mapped.side,
+                    "raw_text": _frozen_raw_text(mapped.raw, mapped.market, mapped.side, game),
+                }
+            )
+    if unmapped:
+        raise ValueError("Unmapped picks:\n" + "\n".join(unmapped))
+    _validate_seed_rows(games, [dict(row) for row in pick_rows], players)
+    return pick_rows
+
+
+def write_wide_picks_csv(seed_dir: Path, *, wide_name: str = "picks_wide.csv") -> Path:
+    games = _read_csv(seed_dir / "games.csv")
+    players = _read_csv(seed_dir / "players.csv")
+    pick_rows = extract_wide_picks(seed_dir / wide_name, games, players)
+    dest = seed_dir / "picks.csv"
+    _write_csv(dest, PICK_FIELDS, pick_rows)
+    return dest
 
 
 def games_exist(db_path: Path) -> bool:
@@ -209,9 +314,15 @@ def seed_from_csv(seed_dir: Path, db_path: Path, *, force: bool = False) -> Seed
                 )
                 pick_count += 1
 
+            from cfbsicko.jobs import copy_freeze_overlay, schedule_lock_jobs
             from cfbsicko.leagues import sync_default_league_members
+            from cfbsicko.store import get_week
 
             sync_default_league_members(conn)
+            copy_freeze_overlay(conn, week_id)
+            seeded = get_week(conn, week_no, season)
+            if seeded.get("status") == "open":
+                schedule_lock_jobs(conn, seeded)
 
         return SeedResult(
             users=len(user_ids),

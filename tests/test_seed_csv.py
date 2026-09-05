@@ -4,7 +4,14 @@ import pytest
 
 from cfbsicko.db import connect
 from cfbsicko.import_sheet import import_master_sheet
-from cfbsicko.seed_csv import SeedConflictError, extract_sheet_to_csv, games_exist, seed_from_csv
+from cfbsicko.seed_csv import (
+    SeedConflictError,
+    extract_sheet_to_csv,
+    extract_wide_picks,
+    games_exist,
+    seed_from_csv,
+    write_wide_picks_csv,
+)
 
 XLSX = Path(__file__).resolve().parents[1] / "data" / "assets" / "CFB Locks MASTER SHEET 2026.xlsx"
 COMMITTED = Path(__file__).resolve().parents[1] / "seeds" / "2026" / "week-01"
@@ -57,8 +64,8 @@ def test_committed_week1_seed(tmp_path):
     result = seed_from_csv(COMMITTED, db)
     assert result.users == 12
     assert result.games >= 80
-    assert result.picks == 50
-    assert set(result.empty_players) == {"Mike", "Rick"}
+    assert result.picks == 60
+    assert result.empty_players == ()
     assert games_exist(db) is True
     conn = connect(db)
     try:
@@ -77,6 +84,27 @@ def test_committed_week1_seed(tmp_path):
         assert scout["side"] == "over"
         assert "54.5" in scout["raw_text"]
         assert "57.5" not in scout["raw_text"]
+        joe = conn.execute(
+            """
+            SELECT p.raw_text, p.side, g.away, g.home, g.spread_home
+            FROM picks p
+            JOIN users u ON u.id = p.user_id
+            JOIN games g ON g.id = p.game_id
+            WHERE u.display_name = 'Joe' AND p.slot = 4
+            """
+        ).fetchone()
+        assert joe["away"] == "Miami (OH)"
+        assert joe["home"] == "Pittsburgh"
+        assert joe["side"] == "home"
+        assert joe["spread_home"] == -16.5
+        assert "16.5" in joe["raw_text"]
+        owners = {
+            row["display_name"]
+            for row in conn.execute(
+                "SELECT DISTINCT u.display_name FROM picks p JOIN users u ON u.id = p.user_id"
+            )
+        }
+        assert {"Mike", "Rick"}.issubset(owners)
         members = conn.execute("SELECT COUNT(*) AS n FROM league_members").fetchone()["n"]
         users = conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
         assert members == users
@@ -91,7 +119,7 @@ def test_seed_refuses_existing_week_without_force(tmp_path):
     with pytest.raises(SeedConflictError, match="already has"):
         seed_from_csv(COMMITTED, db)
     again = seed_from_csv(COMMITTED, db, force=True)
-    assert again.picks == 50
+    assert again.picks == 60
 
 
 def test_seed_rejects_blank_and_unknown_players(tmp_path):
@@ -178,3 +206,55 @@ def test_opposite_signed_spread_does_not_match_frozen():
     assert slate.spread_home == -3.5
     assert _frozen_raw_text("Florida State +3.5", "spread", "home", slate) == "Florida State -3.5"
     assert _frozen_raw_text("Florida State -3.5", "spread", "home", slate) == "Florida State -3.5"
+
+
+def test_extract_wide_picks_week1_snapshot():
+    from cfbsicko.seed_csv import _read_csv
+
+    games = _read_csv(COMMITTED / "games.csv")
+    players = _read_csv(COMMITTED / "players.csv")
+    rows = extract_wide_picks(COMMITTED / "picks_wide.csv", games, players)
+    assert len(rows) == 60
+    owners = {str(row["display_name"]) for row in rows}
+    assert len(owners) == 12
+    assert {"Mike", "Rick"}.issubset(owners)
+    scout = next(row for row in rows if row["display_name"] == "Scout" and int(row["slot"]) == 4)
+    assert scout["away"] == "UAB"
+    assert scout["home"] == "Illinois"
+    assert scout["market"] == "total"
+    assert scout["side"] == "over"
+    assert "54.5" in str(scout["raw_text"])
+    assert "57.5" not in str(scout["raw_text"])
+    joe = next(row for row in rows if row["display_name"] == "Joe" and int(row["slot"]) == 4)
+    assert joe["away"] == "Miami (OH)"
+    assert joe["home"] == "Pittsburgh"
+    assert joe["side"] == "home"
+    assert "16.5" in str(joe["raw_text"])
+
+
+def test_extract_wide_unmapped_raw_fails(tmp_path):
+    from cfbsicko.seed_csv import _read_csv
+
+    wide = tmp_path / "picks_wide.csv"
+    wide.write_text(
+        "Stu,Jack,Billy,Mike,Rick,Wil,Scout,Kenny,Owen,Luke,Joe,Rob\n"
+        "not a real pick,Houston -20.5,MSU -9.5,Colorado +6.5,Georgia Tech -6.5,"
+        "Akron/Wake Under 48.5,Georgia Tech -6.5,Georgia Tech -6.5,Georgia Tech -6.5,"
+        "USC -21.5,Washington State +23.5,North Texas +40.5\n",
+        encoding="utf-8",
+    )
+    games = _read_csv(COMMITTED / "games.csv")
+    players = _read_csv(COMMITTED / "players.csv")
+    with pytest.raises(ValueError, match="Unmapped"):
+        extract_wide_picks(wide, games, players)
+
+
+def test_write_wide_picks_csv_matches_committed(tmp_path):
+    from cfbsicko.seed_csv import _read_csv
+
+    dest = tmp_path / "week-01"
+    dest.mkdir()
+    for name in ("games.csv", "players.csv", "picks_wide.csv"):
+        (dest / name).write_text((COMMITTED / name).read_text(), encoding="utf-8")
+    written = write_wide_picks_csv(dest)
+    assert _read_csv(written) == _read_csv(COMMITTED / "picks.csv")

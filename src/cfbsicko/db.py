@@ -142,8 +142,10 @@ def migrate(conn: sqlite3.Connection) -> None:
     elif row["checksum"] != checksum:
         raise RuntimeError("schema_migrations checksum mismatch — refuse to boot")
     from cfbsicko.leagues import migrate_leagues
+    from cfbsicko.live import migrate_live
 
     migrate_leagues(conn)
+    migrate_live(conn)
     conn.commit()
 
 

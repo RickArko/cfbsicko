@@ -36,6 +36,10 @@ class NotFoundError(KeyError):
     """Missing week/game/user."""
 
 
+class SlateConflictError(ValueError):
+    """Week already has picks; refuse unless force=True."""
+
+
 def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
@@ -73,7 +77,8 @@ def get_week(conn: sqlite3.Connection, week_no: int, season: int | None = None) 
 def list_games(conn: sqlite3.Connection, week_id: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT g.*, r.home_score, r.away_score
+        SELECT g.*, r.home_score, r.away_score,
+            r.status AS game_status, r.period, r.clock, r.source AS result_source
         FROM games g
         LEFT JOIN game_results r ON r.game_id = g.id
         WHERE g.week_id = ?
@@ -228,10 +233,11 @@ def save_picks(
     if not week_is_writable(week, now):
         raise LockClosedError("week is locked")
     validate_pick_set(picks)
-    game_ids = {row["id"] for row in list_games(conn, week["id"])}
+    games = {row["id"]: row for row in list_games(conn, week["id"])}
     for pick in picks:
-        if pick.game_id not in game_ids:
+        if pick.game_id not in games:
             raise PickValidationError(f"game {pick.game_id} is not on this slate")
+    prior = list_user_picks(conn, user_id, week["id"])
     conn.execute("DELETE FROM picks WHERE user_id = ? AND week_id = ?", (user_id, week["id"]))
     for pick in picks:
         conn.execute(
@@ -241,8 +247,24 @@ def save_picks(
             """,
             (user_id, week["id"], pick.slot, pick.game_id, pick.market, pick.side),
         )
+    saved = list_user_picks(conn, user_id, week["id"])
+    conn.execute(
+        "INSERT INTO pick_revisions (user_id, week_id, payload_json) VALUES (?, ?, ?)",
+        (user_id, week["id"], json.dumps(saved, default=str)),
+    )
+    if prior:
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        from cfbsicko.jobs import enqueue_lineup_saved
+
+        enqueue_lineup_saved(
+            conn,
+            user=dict(user) if user else {"id": user_id, "email": None},
+            week=week,
+            before=prior,
+            after=saved,
+        )
     conn.commit()
-    return list_user_picks(conn, user_id, week["id"])
+    return saved
 
 
 def list_user_picks(conn: sqlite3.Connection, user_id: int, week_id: int) -> list[dict[str, Any]]:
@@ -289,11 +311,27 @@ def publish_slate(
     lock_at: str,
     season: int | None = None,
     title: str | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     season = season or Config.SEASON
+    parse_lock_at(lock_at)
     games = parse_slate(slate_text)
     if not games:
         raise ValueError("slate contained no games")
+    existing = conn.execute(
+        "SELECT id FROM weeks WHERE season = ? AND week_no = ?",
+        (season, week_no),
+    ).fetchone()
+    if existing:
+        pick_n = int(
+            conn.execute("SELECT COUNT(*) AS n FROM picks WHERE week_id = ?", (existing["id"],)).fetchone()[
+                "n"
+            ]
+        )
+        if pick_n and not force:
+            raise SlateConflictError(
+                f"Week {week_no} already has {pick_n} picks. Refusing to replace live data."
+            )
     conn.execute(
         """
         INSERT INTO weeks (season, week_no, title, lock_at, status, publish_at)
@@ -308,6 +346,10 @@ def publish_slate(
     )
     week = get_week(conn, week_no, season)
     conn.execute("DELETE FROM picks WHERE week_id = ?", (week["id"],))
+    from cfbsicko.jobs import clear_week_derived_state
+
+    clear_week_derived_state(conn, int(week["id"]))
+    conn.execute("DELETE FROM week_records WHERE week_id = ?", (week["id"],))
     conn.execute(
         "DELETE FROM game_results WHERE game_id IN (SELECT id FROM games WHERE week_id = ?)",
         (week["id"],),
@@ -316,11 +358,27 @@ def publish_slate(
     for order, game in enumerate(games):
         conn.execute(
             """
-            INSERT INTO games (week_id, away, home, spread_home, total, day_label, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO games (
+                week_id, away, home, spread_home, total, day_label, sort_order,
+                market_spread_home, market_total, market_updated_at, market_source
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 'freeze')
             """,
-            (week["id"], game.away, game.home, game.spread_home, game.total, game.day_label, order),
+            (
+                week["id"],
+                game.away,
+                game.home,
+                game.spread_home,
+                game.total,
+                game.day_label,
+                order,
+                game.spread_home,
+                game.total,
+            ),
         )
+    from cfbsicko.jobs import schedule_lock_jobs
+
+    schedule_lock_jobs(conn, week)
     conn.commit()
     return get_week(conn, week_no, season)
 
@@ -335,13 +393,20 @@ def update_week(
 ) -> dict[str, Any]:
     week = get_week(conn, week_no, season)
     if lock_at:
+        parse_lock_at(lock_at)
         conn.execute("UPDATE weeks SET lock_at = ? WHERE id = ?", (lock_at, week["id"]))
     if status:
         if status not in {"draft", "open", "locked", "graded"}:
             raise ValueError(f"invalid status {status}")
         conn.execute("UPDATE weeks SET status = ? WHERE id = ?", (status, week["id"]))
     conn.commit()
-    return get_week(conn, week_no, season)
+    week = get_week(conn, week_no, season)
+    if lock_at:
+        from cfbsicko.jobs import reschedule_lock_jobs
+
+        reschedule_lock_jobs(conn, week)
+        conn.commit()
+    return week
 
 
 def set_game_result(
@@ -352,20 +417,31 @@ def set_game_result(
     away_score: int,
     entered_by: int | None,
     source: str = "manual",
+    status: str = "final",
+    period: str | None = None,
+    clock: str | None = None,
 ) -> dict[str, Any]:
+    if status not in {"scheduled", "in_progress", "final"}:
+        raise ValueError("status must be scheduled, in_progress, or final")
     before = _row(conn.execute("SELECT * FROM game_results WHERE game_id = ?", (game_id,)).fetchone())
     conn.execute(
         """
-        INSERT INTO game_results (game_id, home_score, away_score, source, entered_by)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO game_results (
+            game_id, home_score, away_score, source, entered_by, status, period, clock, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(game_id) DO UPDATE SET
             home_score = excluded.home_score,
             away_score = excluded.away_score,
             source = excluded.source,
             entered_by = excluded.entered_by,
-            entered_at = datetime('now')
+            status = excluded.status,
+            period = excluded.period,
+            clock = excluded.clock,
+            entered_at = datetime('now'),
+            updated_at = datetime('now')
         """,
-        (game_id, home_score, away_score, source, entered_by),
+        (game_id, home_score, away_score, source, entered_by, status, period, clock),
     )
     after = dict(conn.execute("SELECT * FROM game_results WHERE game_id = ?", (game_id,)).fetchone())
     write_audit(
@@ -381,13 +457,22 @@ def set_game_result(
     return after
 
 
-def grade_week(conn: sqlite3.Connection, week_no: int, *, season: int | None = None) -> dict[str, Any]:
+def grade_week(
+    conn: sqlite3.Connection,
+    week_no: int,
+    *,
+    season: int | None = None,
+    partial: bool = False,
+) -> dict[str, Any]:
     week = get_week(conn, week_no, season)
     games = {g["id"]: g for g in list_games(conn, week["id"])}
     picks = conn.execute("SELECT * FROM picks WHERE week_id = ?", (week["id"],)).fetchall()
     for pick in picks:
         game = games[pick["game_id"]]
         if game["home_score"] is None or game["away_score"] is None:
+            continue
+        status = game.get("game_status") or "final"
+        if partial and status != "final":
             continue
         result = result_for_pick(
             market=pick["market"],
@@ -417,10 +502,22 @@ def grade_week(conn: sqlite3.Connection, week_no: int, *, season: int | None = N
             """,
             (user["id"], week["id"], wins, ties, losses),
         )
-    conn.execute("UPDATE weeks SET status = 'graded' WHERE id = ?", (week["id"],))
+    all_final = bool(games) and all(
+        (g.get("game_status") or ("final" if g.get("home_score") is not None else None)) == "final"
+        and g.get("home_score") is not None
+        for g in games.values()
+    )
+    if not partial or all_final:
+        conn.execute("UPDATE weeks SET status = 'graded' WHERE id = ?", (week["id"],))
+        conn.commit()
+        snap = write_snapshot(conn, week["id"], "grade")
+        from cfbsicko.jobs import enqueue_standings_mail
+
+        enqueue_standings_mail(conn, get_week(conn, week_no, season))
+        conn.commit()
+        return {"week": get_week(conn, week_no, season), "snapshot_id": snap["id"]}
     conn.commit()
-    snap = write_snapshot(conn, week["id"], "grade")
-    return {"week": get_week(conn, week_no, season), "snapshot_id": snap["id"]}
+    return {"week": get_week(conn, week_no, season), "snapshot_id": None}
 
 
 def override_pick(

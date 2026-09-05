@@ -45,6 +45,25 @@ def main(argv: list[str] | None = None) -> int:
         help="Replace an existing week's games/picks (destructive; backup first)",
     )
 
+    replay = sub.add_parser(
+        "replay-week1",
+        help="Replay Week 1 wide picks through save_picks (local SQLite only)",
+    )
+    replay.add_argument("--db-path", default=None)
+    replay.add_argument("--seed-dir", default="seeds/2026/week-01")
+    replay.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace existing Week 1 picks (destructive; a .pre-replay backup is written first)",
+    )
+
+    week2 = sub.add_parser(
+        "publish-week2",
+        help="Publish the local Week 2 rehearsal slate (does not touch Week 1 picks)",
+    )
+    week2.add_argument("--db-path", default=None)
+    week2.add_argument("--seed-dir", default="seeds/2026/week-02")
+
     sub.add_parser("serve", help="Run the API (default)")
 
     mail = sub.add_parser("mail-probe", help="Send a one-off SMTP probe")
@@ -120,6 +139,34 @@ def main(argv: list[str] | None = None) -> int:
             f"seeded users={result.users} games={result.games} picks={result.picks} "
             f"empty={list(result.empty_players)}"
         )
+        return 0
+
+    if cmd == "replay-week1":
+        from cfbsicko.replay import ReplayPathError, replay_week1
+
+        db_path = Path(args.db_path).expanduser() if args.db_path else Config.database_path()
+        try:
+            result = replay_week1(Path(args.seed_dir), db_path, force=args.force)
+        except (ReplayPathError, SeedConflictError) as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        print(
+            f"replayed users={result.users} picks={result.picks} "
+            f"status={result.week_status} backup={result.backup}"
+        )
+        return 0
+
+    if cmd == "publish-week2":
+        from cfbsicko.replay import ReplayPathError, publish_week2_rehearsal
+        from cfbsicko.store import SlateConflictError
+
+        db_path = Path(args.db_path).expanduser() if args.db_path else Config.database_path()
+        try:
+            week = publish_week2_rehearsal(Path(args.seed_dir), db_path)
+        except (ReplayPathError, SlateConflictError, FileNotFoundError, ValueError) as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        print(f"published week={week['week_no']} status={week['status']} title={week['title']}")
         return 0
 
     if cmd == "mail-probe":

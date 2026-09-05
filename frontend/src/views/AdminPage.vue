@@ -34,7 +34,13 @@
         <input v-model="lockAt" placeholder="2026-09-10T18:00:00-04:00" />
       </div>
       <textarea v-model="slate" rows="10" style="margin: 0.6rem 0"></textarea>
-      <button type="button" @click="publish">Publish</button>
+      <div class="row">
+        <button type="button" @click="publish(false)">Publish</button>
+        <button class="ghost" type="button" @click="ingest(false)">Ingest draft</button>
+        <button class="ghost" type="button" @click="freeze">Freeze lines</button>
+      </div>
+      <p v-if="weekStatus" class="muted">{{ weekStatus }}</p>
+      <p v-if="unmatched.length" class="muted">Unmatched provider ids: {{ unmatched.map((g) => g.away + ' at ' + g.home).join('; ') }}</p>
     </section>
     <section class="card" style="margin-bottom: 1rem">
       <h2>Grade</h2>
@@ -87,6 +93,8 @@ const scores = reactive({});
 const users = ref([]);
 const snapshots = ref([]);
 const note = ref("");
+const weekStatus = ref("");
+const unmatched = ref([]);
 
 function auth() {
   return { token: props.token };
@@ -107,6 +115,13 @@ async function load() {
   users.value = (await api("/api/admin/users", auth())).users;
   snapshots.value = (await api("/api/admin/snapshots", auth())).snapshots;
   if (props.me?.league?.name) currentLeagueName.value = props.me.league.name;
+  try {
+    const live = await api("/api/admin/live", auth());
+    if (live.week) weekStatus.value = `${live.week.title} · ${live.week.status}`;
+    unmatched.value = live.unmatched || [];
+  } catch {
+    unmatched.value = [];
+  }
 }
 
 async function createLeague() {
@@ -132,14 +147,50 @@ async function invite() {
   invEmail.value = "";
 }
 
-async function publish() {
-  await api("/api/admin/weeks", {
-    method: "POST",
-    token: props.token,
-    body: { week_no: weekNo.value, lock_at: lockAt.value, slate_text: slate.value },
-  });
-  note.value = "Slate published.";
-  await load();
+async function publish(force) {
+  try {
+    await api("/api/admin/weeks", {
+      method: "POST",
+      token: props.token,
+      body: { week_no: weekNo.value, lock_at: lockAt.value, slate_text: slate.value, force: Boolean(force) },
+    });
+    note.value = "Slate published.";
+    await load();
+  } catch (exc) {
+    if (exc.status === 409 && !force && window.confirm(`${exc.message} Replace anyway?`)) {
+      await publish(true);
+      return;
+    }
+    note.value = exc.message;
+  }
+}
+
+async function ingest(force) {
+  try {
+    await api(`/api/admin/weeks/${weekNo.value}/ingest`, {
+      method: "POST",
+      token: props.token,
+      body: { lock_at: lockAt.value, force: Boolean(force) },
+    });
+    note.value = "Draft ingested. Freeze to open the week.";
+    await load();
+  } catch (exc) {
+    if (exc.status === 409 && !force && window.confirm(`${exc.message} Replace anyway?`)) {
+      await ingest(true);
+      return;
+    }
+    note.value = exc.message;
+  }
+}
+
+async function freeze() {
+  try {
+    await api(`/api/admin/weeks/${weekNo.value}/freeze`, { method: "POST", token: props.token });
+    note.value = "Lines frozen. Lock jobs scheduled.";
+    await load();
+  } catch (exc) {
+    note.value = exc.message;
+  }
 }
 
 async function saveScore(game) {

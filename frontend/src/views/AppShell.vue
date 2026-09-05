@@ -19,6 +19,7 @@
             <router-link to="/app">Picks</router-link>
             <router-link to="/app/standings">Standings</router-link>
             <router-link v-if="me.is_commish" to="/app/admin">Admin</router-link>
+            <span v-if="unread" class="pill" aria-label="Unread notifications">{{ unread }}</span>
           </template>
           <button v-if="token" class="ghost" type="button" @click="logout">Out</button>
         </div>
@@ -46,7 +47,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import SignIn from "../components/SignIn.vue";
 import { api, getLeagueId, setLeagueId } from "../api.js";
 import { getToken, hashAuthError, signOut } from "../session.js";
@@ -56,6 +57,8 @@ const me = ref(null);
 const leagueId = ref(getLeagueId());
 const denied = ref("");
 const hashNote = ref("");
+const unread = ref(0);
+let notifyTimer;
 
 async function refresh() {
   denied.value = "";
@@ -72,6 +75,7 @@ async function refresh() {
   }
   try {
     me.value = await api("/api/me", { token: token.value });
+    await loadUnread();
     if (!leagueId.value && me.value.league?.id) {
       leagueId.value = me.value.league.id;
       setLeagueId(leagueId.value);
@@ -123,6 +127,27 @@ async function logout() {
   denied.value = "";
 }
 
+async function loadUnread() {
+  if (!token.value) {
+    unread.value = 0;
+    return;
+  }
+  try {
+    const data = await api("/api/me/notifications", { token: token.value });
+    unread.value = data.unread || 0;
+  } catch {
+    unread.value = 0;
+  }
+}
+
+function pollMs() {
+  const day = new Date().getDay();
+  const hour = new Date().getHours();
+  if (day === 4 && hour >= 16) return 30000;
+  if (day === 5 || day === 6 || day === 0) return 30000;
+  return 300000;
+}
+
 onMounted(async () => {
   const fromHash = hashAuthError();
   if (fromHash) {
@@ -130,5 +155,7 @@ onMounted(async () => {
     history.replaceState(null, "", window.location.pathname);
   }
   await refresh();
+  notifyTimer = setInterval(loadUnread, pollMs());
 });
+onUnmounted(() => clearInterval(notifyTimer));
 </script>
