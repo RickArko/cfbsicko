@@ -14,6 +14,16 @@ Billy,2,Northern Illinois,Iowa,spread,away,Northern Illinois +31.5
 Billy,3,VMI,Virginia Tech,spread,away,VMI +55.5
 Billy,4,Ball State,Ohio State,total,over,OSU/Ball State Over 56.5
 Billy,5,Wisconsin,Notre Dame,spread,home,ND -20.5
+Mike,1,Colorado,Georgia Tech,spread,away,Colorado +6.5
+Mike,2,Baylor,Auburn,spread,home,Auburn -7.5
+Mike,3,Miami (FL),Stanford,spread,away,Miami -24.5
+Mike,4,Clemson,LSU,spread,away,Clemson +10.5
+Mike,5,Boise State,Oregon,spread,away,Boise State +24.5
+Rick,1,Colorado,Georgia Tech,spread,home,Georgia Tech -6.5
+Rick,2,Indiana State,Purdue,spread,home,Purdue -36.5
+Rick,3,Toledo,Michigan State,spread,home,Michigan State -9.5
+Rick,4,Wisconsin,Notre Dame,spread,home,Notre Dame -20.5
+Rick,5,Louisville,Ole Miss,spread,home,Ole Miss -6.5
 Wil,1,Akron,Wake Forest,total,under,Akron/Wake Under 48.5
 Wil,2,Louisville,Ole Miss,total,under,Ole Miss/Louisville Under 55.5
 Wil,3,Toledo,Michigan State,total,under,Toledo/MSU Under 47.5
@@ -21,7 +31,7 @@ Wil,4,East Carolina,Alabama,spread,home,Alabama -27.5
 Wil,5,UCLA,California,spread,home,Cal +1.5
 Scout,1,Colorado,Georgia Tech,spread,home,Georgia Tech -6.5
 Scout,2,Indiana State,Purdue,total,under,PUR/ISU Under 57.5
-Scout,3,Wisconsin,Notre Dame,spread,home,ND -20.5
+Scout,3,Toledo,Michigan State,spread,home,Michigan State -9.5
 Scout,4,UAB,Illinois,total,over,UAB/Illinois Over 54.5
 Scout,5,Ball State,Ohio State,total,over,Ball State/Ohio State Over 56.5
 Kenny,1,Colorado,Georgia Tech,spread,home,Georgia Tech -6.5
@@ -42,7 +52,7 @@ Luke,5,Ball State,Ohio State,spread,home,Ohio State -50.5
 Joe,1,Washington State,Washington,spread,away,Washington State +23.5
 Joe,2,Colorado,Georgia Tech,spread,home,Georgia Tech -6.5
 Joe,3,East Carolina,Alabama,spread,away,ECU +27.5
-Joe,4,Boston College,Cincinnati,spread,home,Cincinnati -7.5
+Joe,4,Miami (OH),Pittsburgh,spread,home,Pitt -16.5
 Joe,5,Wisconsin,Notre Dame,spread,home,Notre Dame -20.5
 Rob,1,North Texas,Indiana,spread,away,North Texas +40.5
 Rob,2,Wisconsin,Notre Dame,spread,away,Wisconsin +20.5

@@ -76,6 +76,11 @@ TEAM_ALIASES: dict[str, tuple[str, ...]] = {
     "uab": ("UAB",),
     "ndsu": ("North Dakota State",),
     "miami": ("Miami (FL)",),
+    "pitt": ("Pittsburgh",),
+    "pittsburgh": ("Pittsburgh",),
+    "colorado": ("Colorado",),
+    "auburn": ("Auburn",),
+    "boise state": ("Boise State",),
 }
 
 

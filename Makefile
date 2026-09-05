@@ -14,7 +14,7 @@ SEASON ?= 2026
 	fly.app fly.volume fly.secrets fly.test-login fly.test-login-off \
 	fly.deploy fly.status fly.logs fly.certs \
 	fly.db-backup fly.db-backup-verify fly.db-restore import-sheet \
-	extract-sheet seed-csv fly.seed-csv
+	extract-sheet seed-csv fly.seed-csv replay-week1 publish-week2
 
 bootstrap: ## uv sync + .env from example
 	$(UV) sync --group dev
@@ -42,6 +42,7 @@ invite-blast: ## Send the reviewed group signup to the trial roster
 	$(UV) run cfbsicko invite-group --blast --i-reviewed
 
 SEED_DIR ?= seeds/2026/week-01
+WEEK2_DIR ?= seeds/2026/week-02
 SHEET ?= data/assets/CFB Locks MASTER SHEET 2026.xlsx
 
 import-sheet:
@@ -52,6 +53,12 @@ extract-sheet:
 
 seed-csv:
 	$(UV) run cfbsicko seed-csv "$(SEED_DIR)"
+
+replay-week1:
+	$(UV) run cfbsicko replay-week1 --seed-dir "$(SEED_DIR)"
+
+publish-week2:
+	$(UV) run cfbsicko publish-week2 --seed-dir "$(WEEK2_DIR)"
 
 fly.seed-csv:
 	FLY_APP="$(FLY_APP)" FLY_BIN="$(FLY)" SEED_DIR="$(SEED_DIR)" \

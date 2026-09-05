@@ -27,6 +27,7 @@ backups/
 !.ai/plans/auth-prod.md
 !.ai/plans/weekly-lines.md
 !.ai/plans/backend-arch.md
+!.ai/plans/add-week1pick-sim-week2.md
 .cursor/plans/*
 artifacts/
 .tmp*
