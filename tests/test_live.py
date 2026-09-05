@@ -707,3 +707,303 @@ def test_default_feed_wires_cfbd_when_key_present():
     assert slate[0].away == "Houston"
     assert slate[0].spread_home == -20.5
     assert slate[0].provider_game_id == "401"
+
+
+def _final_feed():
+    return StaticFeed(
+        [
+            FeedGame(
+                "Houston", "Oklahoma", -20.5, 54.5, "hou-okl", home_score=14, away_score=42, status="final"
+            ),
+            FeedGame(
+                "Purdue",
+                "Indiana State",
+                -14.5,
+                57.5,
+                "pur-isu",
+                home_score=21,
+                away_score=10,
+                status="final",
+            ),
+            FeedGame(
+                "SMU", "Florida State", -3.5, 53.5, "smu-fsu", home_score=24, away_score=20, status="final"
+            ),
+            FeedGame(
+                "Colorado", "Georgia Tech", -6.5, 50.5, "col-gt", home_score=31, away_score=17, status="final"
+            ),
+            FeedGame(
+                "Washington State",
+                "Ole Miss",
+                -23.5,
+                61.5,
+                "wsu-om",
+                home_score=45,
+                away_score=10,
+                status="final",
+            ),
+        ]
+    )
+
+
+def test_tick_scores_fetches_corrections_for_graded_week(imported, clock, commish_headers):
+    clock["now"] = clock["now"].replace(year=2026, month=9, day=10, hour=12)
+    feed = _final_feed()
+    app, _ = _live_app(imported, clock, feed=feed)
+    with TestClient(app) as client:
+        invite(client, commish_headers, "grader@example.com", "Grader")
+        client.post(
+            "/api/admin/weeks/2/ingest",
+            json={"lock_at": "2026-09-10T18:00:00-04:00"},
+            headers=commish_headers,
+        )
+        frozen = client.post("/api/admin/weeks/2/freeze", headers=commish_headers)
+        games = frozen.json()["games"]
+        headers = auth_header("grader-sub", "grader@example.com")
+        saved = client.put("/api/weeks/2/picks", json={"picks": _five(games)}, headers=headers)
+        assert saved.status_code == 200, saved.text
+        clock["now"] = clock["now"].replace(day=11, hour=20)
+        client.post("/api/internal/tick", headers={"X-Cron-Token": "tick"})
+        done = client.get("/api/weeks/2", headers=headers).json()
+        assert done["week"]["status"] == "graded", done
+        feed.games[0] = FeedGame(
+            "Houston", "Oklahoma", -20.5, 54.5, "hou-okl", home_score=14, away_score=45, status="final"
+        )
+        client.post("/api/internal/tick", headers={"X-Cron-Token": "tick"})
+        row = app.state.conn.execute(
+            "SELECT away_score FROM game_results WHERE game_id = ?", (games[0]["id"],)
+        ).fetchone()
+    assert row["away_score"] == 45
+
+
+def test_publish_resolves_provider_ids(imported, clock, commish_headers):
+    app, _ = _live_app(imported, clock)
+    with TestClient(app) as client:
+        pub = client.post(
+            "/api/admin/weeks",
+            json={"week_no": 2, "lock_at": "2026-09-10T18:00:00-04:00", "slate_text": SLATE5},
+            headers=commish_headers,
+        )
+        assert pub.status_code == 200, pub.text
+        body = pub.json()
+        assert body["provider_matched"] == 5
+        assert all(game["provider_game_id"] for game in body["games"])
+
+
+def test_admin_live_reports_newest_draft_week(imported, clock, commish_headers):
+    feed = StaticFeed(list(FEED5))
+    app, _ = _live_app(imported, clock, feed=feed)
+    with TestClient(app) as client:
+        client.post(
+            "/api/admin/weeks/2/ingest",
+            json={"lock_at": "2026-09-10T18:00:00-04:00"},
+            headers=commish_headers,
+        )
+        client.post("/api/admin/weeks/2/freeze", headers=commish_headers)
+        ingested = client.post(
+            "/api/admin/weeks/3/ingest",
+            json={"lock_at": "2026-09-17T18:00:00-04:00"},
+            headers=commish_headers,
+        )
+        assert ingested.status_code == 200, ingested.text
+        game = ingested.json()["games"][0]
+        cleared = client.patch(
+            f"/api/admin/games/{game['id']}/provider",
+            json={"provider_game_id": ""},
+            headers=commish_headers,
+        )
+        assert cleared.status_code == 200, cleared.text
+        live = client.get("/api/admin/live", headers=commish_headers).json()
+        assert live["week"]["week_no"] == 3
+        unmatched = {(row["away"], row["home"]) for row in live["unmatched"]}
+        assert (game["away"], game["home"]) in unmatched
+
+
+def test_bad_lock_at_is_rejected_before_any_mutation(imported, clock, commish_headers):
+    app, _ = _live_app(imported, clock)
+    with TestClient(app) as client:
+        before = client.get("/api/weeks/1", headers=commish_headers).json()["week"]
+        picks_before = app.state.conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0]
+        weeks_before = app.state.conn.execute("SELECT COUNT(*) FROM weeks").fetchone()[0]
+
+        bad_ingest = client.post(
+            "/api/admin/weeks/1/ingest",
+            json={"lock_at": "not-a-date", "force": True},
+            headers=commish_headers,
+        )
+        assert bad_ingest.status_code == 400, bad_ingest.text
+        bad_publish = client.post(
+            "/api/admin/weeks",
+            json={"week_no": 9, "lock_at": "garbage", "slate_text": SLATE5, "force": True},
+            headers=commish_headers,
+        )
+        assert bad_publish.status_code == 400, bad_publish.text
+        bad_patch = client.patch("/api/admin/weeks/1", json={"lock_at": "nope"}, headers=commish_headers)
+        assert bad_patch.status_code == 400, bad_patch.text
+
+        after = client.get("/api/weeks/1", headers=commish_headers).json()["week"]
+        assert after["lock_at"] == before["lock_at"]
+        assert after["title"] == before["title"]
+        assert app.state.conn.execute("SELECT COUNT(*) FROM picks").fetchone()[0] == picks_before
+        assert app.state.conn.execute("SELECT COUNT(*) FROM weeks").fetchone()[0] == weeks_before
+
+
+def test_force_replace_clears_week_records(imported, clock, commish_headers):
+    app, _ = _live_app(imported, clock)
+    with TestClient(app) as client:
+        client.get("/api/weeks/1", headers=commish_headers)
+        conn = app.state.conn
+        week_id = conn.execute("SELECT id FROM weeks WHERE week_no = 1").fetchone()[0]
+        user_id = conn.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+
+        def seed_record() -> None:
+            conn.execute(
+                "INSERT OR REPLACE INTO week_records (user_id, week_id, wins, ties, losses)"
+                " VALUES (?, ?, 4, 0, 1)",
+                (user_id, week_id),
+            )
+            conn.commit()
+
+        seed_record()
+        pub = client.post(
+            "/api/admin/weeks",
+            json={
+                "week_no": 1,
+                "lock_at": "2026-09-03T18:00:00-04:00",
+                "slate_text": SLATE5,
+                "force": True,
+            },
+            headers=commish_headers,
+        )
+        assert pub.status_code == 200, pub.text
+        assert (
+            conn.execute("SELECT COUNT(*) FROM week_records WHERE week_id = ?", (week_id,)).fetchone()[0] == 0
+        )
+
+        seed_record()
+        ing = client.post(
+            "/api/admin/weeks/1/ingest",
+            json={"lock_at": "2026-09-03T18:00:00-04:00", "force": True},
+            headers=commish_headers,
+        )
+        assert ing.status_code == 200, ing.text
+        assert (
+            conn.execute("SELECT COUNT(*) FROM week_records WHERE week_id = ?", (week_id,)).fetchone()[0] == 0
+        )
+
+
+def test_line_ticks_are_kept_before_lock(imported, clock, commish_headers):
+    clock["now"] = clock["now"].replace(year=2026, month=9, day=8, hour=12)
+    feed = StaticFeed(list(FEED5))
+    app, _ = _live_app(imported, clock, feed=feed)
+    with TestClient(app) as client:
+        client.post(
+            "/api/admin/weeks/2/ingest",
+            json={"lock_at": "2026-09-10T18:00:00-04:00"},
+            headers=commish_headers,
+        )
+        client.post("/api/admin/weeks/2/freeze", headers=commish_headers)
+        feed.games[0] = FeedGame("Houston", "Oklahoma", -22.0, 54.5, "hou-okl", day_label="Thursday")
+        moved = tick_odds(app.state.conn, clock["now"], feed)
+        assert moved >= 1
+        kept = app.state.conn.execute("SELECT COUNT(*) FROM line_ticks").fetchone()[0]
+        assert kept >= 1
+
+
+def test_notification_unread_count_is_not_capped_by_page(imported, clock, commish_headers):
+    app, _ = _live_app(imported, clock)
+    with TestClient(app) as client:
+        invite(client, commish_headers, "busy@example.com", "Busy")
+        me = client.get("/api/me", headers=auth_header("busy-sub", "busy@example.com")).json()
+        conn = app.state.conn
+        for i in range(55):
+            conn.execute(
+                "INSERT INTO notifications (user_id, kind, title, body, href)"
+                " VALUES (?, 'note', ?, ?, '/app')",
+                (me["id"], f"note {i}", "body"),
+            )
+        conn.commit()
+        data = client.get("/api/me/notifications", headers=auth_header("busy-sub", "busy@example.com")).json()
+    assert len(data["items"]) == 50
+    assert data["unread"] == 55
+
+
+def test_live_ticks_run_off_loop_with_dedicated_connection(imported, clock, commish_headers):
+    import asyncio
+    import contextlib
+    import threading
+
+    from cfbsicko import jobs as jobs_mod
+    from cfbsicko.app import _run_live_ticks
+
+    seen: dict[str, object] = {}
+    ready = threading.Event()
+    real_tick_jobs = jobs_mod.tick_jobs
+
+    def spy_jobs(conn, now):
+        seen["thread"] = threading.get_ident()
+        seen["conn"] = conn
+        ready.set()
+        return 0
+
+    jobs_mod.tick_jobs = spy_jobs
+    app, _ = _live_app(imported, clock)
+    try:
+        with TestClient(app) as client:
+            client.get("/api/weeks/1", headers=commish_headers)
+            shared = app.state.conn
+            assert shared is not None
+
+            async def run() -> None:
+                task = asyncio.create_task(_run_live_ticks(app))
+                for _ in range(500):
+                    if ready.is_set():
+                        break
+                    await asyncio.sleep(0.02)
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+            asyncio.run(run())
+    finally:
+        jobs_mod.tick_jobs = real_tick_jobs
+    assert seen["thread"] != threading.get_ident()
+    assert seen["conn"] is not shared
+
+
+def test_cfbd_scoreboard_parses_nested_teams_and_keeps_flat_fallback():
+    from cfbsicko.feed import CfbdFeed
+
+    scoreboard = [
+        {
+            "id": 501,
+            "awayTeam": {"school": "Houston", "points": 30},
+            "homeTeam": {"school": "Oklahoma", "points": 31},
+            "status": {"type": {"name": "in_progress", "completed": False}},
+            "period": 4,
+        }
+    ]
+    games_flat = [
+        {
+            "id": 502,
+            "awayTeam": "Purdue",
+            "homeTeam": "Indiana State",
+            "awayPoints": 10,
+            "homePoints": 21,
+            "status": "completed",
+            "completed": True,
+        }
+    ]
+
+    feed = CfbdFeed("k", get_json=lambda path, params: scoreboard if path == "/scoreboard" else [])
+    nested = feed.scores(["501"])
+    assert nested[0].away == "Houston"
+    assert nested[0].home == "Oklahoma"
+    assert nested[0].away_score == 30
+    assert nested[0].home_score == 31
+    assert nested[0].status == "in_progress"
+
+    fallback = CfbdFeed("k", get_json=lambda path, params: [] if path == "/scoreboard" else games_flat)
+    flat = fallback.scores(["502"])
+    assert flat[0].away == "Purdue"
+    assert flat[0].home_score == 21
+    assert flat[0].status == "final"

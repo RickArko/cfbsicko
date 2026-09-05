@@ -152,13 +152,15 @@ class CfbdFeed:
         )
 
     def _from_score(self, row: dict[str, Any]) -> FeedGame | None:
-        away = _field(row, "awayTeam", "away_team")
-        home = _field(row, "homeTeam", "home_team")
+        away, away_score = _team_field(
+            row, ("awayTeam", "away_team"), ("awayPoints", "away_points", "awayScore")
+        )
+        home, home_score = _team_field(
+            row, ("homeTeam", "home_team"), ("homePoints", "home_points", "homeScore")
+        )
         gid = _field(row, "id", "gameId", "game_id")
         if not away or not home or gid is None:
             return None
-        home_score = _field(row, "homePoints", "home_points", "homeScore")
-        away_score = _field(row, "awayPoints", "away_points", "awayScore")
         return FeedGame(
             away=str(away),
             home=str(home),
@@ -167,10 +169,21 @@ class CfbdFeed:
             provider_game_id=str(gid),
             home_score=int(home_score) if home_score is not None else None,
             away_score=int(away_score) if away_score is not None else None,
-            status=_game_status(row),
+            status=_game_status(row, home_score=home_score, away_score=away_score),
             period=str(_field(row, "period", "currentPeriod") or "") or None,
             clock=str(_field(row, "clock") or "") or None,
         )
+
+
+def _team_field(
+    row: dict[str, Any], team_names: tuple[str, ...], score_names: tuple[str, ...]
+) -> tuple[str | None, Any]:
+    val = _field(row, *team_names)
+    if isinstance(val, dict):
+        name = val.get("school") or val.get("displayName") or val.get("name")
+        score = val.get("points", val.get("score"))
+        return (str(name) if name else None), score
+    return (str(val) if val is not None else None), _field(row, *score_names)
 
 
 def _field(row: dict[str, Any], *names: str) -> Any:
@@ -196,11 +209,17 @@ def _consensus_line(lines: list[dict[str, Any]]) -> tuple[float | None, float | 
     return float(spread), float(total)
 
 
-def _game_status(row: dict[str, Any]) -> str:
-    raw = str(_field(row, "status") or "").lower()
-    if row.get("completed") or raw in {"final", "completed"}:
+def _game_status(row: dict[str, Any], *, home_score: Any = None, away_score: Any = None) -> str:
+    raw_status = _field(row, "status")
+    completed = bool(row.get("completed"))
+    if isinstance(raw_status, dict):
+        inner = raw_status.get("type") or {}
+        completed = completed or bool(raw_status.get("completed") or inner.get("completed"))
+        raw_status = inner.get("name") or raw_status.get("description") or ""
+    raw = str(raw_status or "").lower()
+    if completed or raw in {"final", "completed"}:
         return "final"
-    if raw in {"in_progress", "inprogress", "live"} or _field(row, "homePoints", "home_points") is not None:
+    if raw in {"in_progress", "inprogress", "live"} or home_score is not None or away_score is not None:
         return "in_progress"
     return "scheduled"
 

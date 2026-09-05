@@ -172,32 +172,37 @@ def _now_utc() -> datetime:
     return datetime.now(UTC)
 
 
+def _tick_pass(app: FastAPI, now_m: float, last_odds: float, last_scores: float) -> tuple[float, float]:
+    conn = connect(app.state.db_path)
+
+    def _send(to: str, subject: str, body: str, html: str | None = None) -> str:
+        return _dispatch_mail(app, to, subject, body, html=html)
+
+    from cfbsicko.jobs import tick_jobs, tick_odds, tick_outbox, tick_scores
+
+    try:
+        now = app.state.now_fn()
+        tick_jobs(conn, now)
+        tick_outbox(conn, now, _send)
+        if now_m - last_odds >= 900:
+            tick_odds(conn, now, app.state.feed)
+            last_odds = now_m
+        if now_m - last_scores >= 60:
+            tick_scores(conn, now, app.state.feed)
+            last_scores = now_m
+        return last_odds, last_scores
+    finally:
+        conn.close()
+
+
 async def _run_live_ticks(app: FastAPI) -> None:
 
     last_odds = 0.0
     last_scores = 0.0
     while True:
         try:
-            loop = asyncio.get_running_loop()
-            now_m = loop.time()
-            conn = getattr(app.state, "conn", None)
-            if conn is None:
-                app.state.conn = connect(app.state.db_path)
-                conn = app.state.conn
-
-            def _send(to: str, subject: str, body: str, html: str | None = None) -> str:
-                return _dispatch_mail(app, to, subject, body, html=html)
-
-            from cfbsicko.jobs import tick_jobs, tick_odds, tick_outbox, tick_scores
-
-            tick_jobs(conn, app.state.now_fn())
-            tick_outbox(conn, app.state.now_fn(), _send)
-            if now_m - last_odds >= 900:
-                tick_odds(conn, app.state.now_fn(), app.state.feed)
-                last_odds = now_m
-            if now_m - last_scores >= 60:
-                tick_scores(conn, app.state.now_fn(), app.state.feed)
-                last_scores = now_m
+            now_m = asyncio.get_running_loop().time()
+            last_odds, last_scores = await asyncio.to_thread(_tick_pass, app, now_m, last_odds, last_scores)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -603,7 +608,13 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"week": week, "games": list_games(db(), week["id"])}
+        from cfbsicko.jobs import resolve_provider_ids
+
+        matched = resolve_provider_ids(
+            db(), int(week["id"]), app.state.feed.slate(int(week["season"]), int(week["week_no"]))
+        )
+        db().commit()
+        return {"week": week, "games": list_games(db(), week["id"]), "provider_matched": matched}
 
     @app.post("/api/admin/weeks/{week_no}/ingest")
     def admin_ingest(week_no: int, body: IngestIn, user: dict[str, Any] = Depends(commish)):
@@ -649,9 +660,9 @@ def create_app(
 
     @app.get("/api/admin/live")
     def admin_live(user: dict[str, Any] = Depends(commish)):
-        from cfbsicko.jobs import outbox_failures, unmatched_games
+        from cfbsicko.jobs import open_or_draft_week, outbox_failures, unmatched_games
 
-        week = current_week(db())
+        week = open_or_draft_week(db()) or current_week(db())
         if week is None:
             return {"week": None, "unmatched": [], "outbox_failures": outbox_failures(db())}
         return {

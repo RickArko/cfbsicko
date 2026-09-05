@@ -314,6 +314,7 @@ def publish_slate(
     force: bool = False,
 ) -> dict[str, Any]:
     season = season or Config.SEASON
+    parse_lock_at(lock_at)
     games = parse_slate(slate_text)
     if not games:
         raise ValueError("slate contained no games")
@@ -345,6 +346,7 @@ def publish_slate(
     )
     week = get_week(conn, week_no, season)
     conn.execute("DELETE FROM picks WHERE week_id = ?", (week["id"],))
+    conn.execute("DELETE FROM week_records WHERE week_id = ?", (week["id"],))
     conn.execute(
         "DELETE FROM game_results WHERE game_id IN (SELECT id FROM games WHERE week_id = ?)",
         (week["id"],),
@@ -388,6 +390,7 @@ def update_week(
 ) -> dict[str, Any]:
     week = get_week(conn, week_no, season)
     if lock_at:
+        parse_lock_at(lock_at)
         conn.execute("UPDATE weeks SET lock_at = ? WHERE id = ?", (lock_at, week["id"]))
     if status:
         if status not in {"draft", "open", "locked", "graded"}:

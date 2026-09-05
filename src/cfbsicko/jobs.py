@@ -413,7 +413,7 @@ def tick_odds(
     now = _as_aware(now)
     if not in_odds_window(now):
         return 0
-    week = _open_or_draft_week(conn, season)
+    week = open_or_draft_week(conn, season)
     if week is None:
         return 0
     if week["status"] != "draft" and not week_is_writable(week, now):
@@ -480,7 +480,7 @@ def tick_odds(
             if week_is_writable(week, now):
                 _enqueue_line_moved(conn, week, game, item)
         moved += 1
-    _prune_old_ticks(conn, week)
+    _prune_old_ticks(conn, week, now)
     conn.commit()
     return moved
 
@@ -528,9 +528,11 @@ def _enqueue_line_moved(
         )
 
 
-def _prune_old_ticks(conn: sqlite3.Connection, week: dict[str, Any]) -> None:
+def _prune_old_ticks(conn: sqlite3.Connection, week: dict[str, Any], now: datetime) -> None:
     lock_at = week.get("lock_at")
     if not lock_at:
+        return
+    if _parse_when(lock_at) > now:
         return
     conn.execute(
         """
@@ -550,9 +552,19 @@ def tick_scores(
     season: int | None = None,
 ) -> int:
     now = _as_aware(now)
-    week = _currentish_week(conn, season)
-    if week is None:
-        return 0
+    weeks: list[dict[str, Any]] = []
+    primary = _currentish_week(conn, season)
+    if primary is not None:
+        weeks.append(primary)
+    graded = _latest_graded_week(conn, season)
+    if graded is not None and (primary is None or graded["id"] != primary["id"]):
+        weeks.append(graded)
+    return sum(_tick_scores_week(conn, now, feed, week) for week in weeks)
+
+
+def _tick_scores_week(
+    conn: sqlite3.Connection, now: datetime, feed: ScoreOddsFeed, week: dict[str, Any]
+) -> int:
     games = [g for g in list_games(conn, week["id"]) if g.get("provider_game_id")]
     any_live = any((g.get("game_status") or "") == "in_progress" for g in games)
     if not in_scores_window(now, any_in_progress=any_live):
@@ -593,6 +605,18 @@ def tick_scores(
     return changed
 
 
+def _latest_graded_week(conn: sqlite3.Connection, season: int | None) -> dict[str, Any] | None:
+    season = season or Config.SEASON
+    row = conn.execute(
+        """
+        SELECT * FROM weeks WHERE season = ? AND status = 'graded'
+        ORDER BY week_no DESC LIMIT 1
+        """,
+        (season,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def ingest_draft(
     conn: sqlite3.Connection,
     *,
@@ -607,6 +631,7 @@ def ingest_draft(
 
     if not games:
         raise ValueError("feed returned no games")
+    _parse_when(lock_at)
     season = season or Config.SEASON
     existing = conn.execute(
         "SELECT id FROM weeks WHERE season = ? AND week_no = ?",
@@ -638,6 +663,7 @@ def ingest_draft(
     )
     if existing_picks and force:
         conn.execute("DELETE FROM picks WHERE week_id = ?", (week["id"],))
+    conn.execute("DELETE FROM week_records WHERE week_id = ?", (week["id"],))
     conn.execute(
         "DELETE FROM game_results WHERE game_id IN (SELECT id FROM games WHERE week_id = ?)",
         (week["id"],),
@@ -752,7 +778,12 @@ def list_notifications(conn: sqlite3.Connection, user_id: int) -> dict[str, Any]
             (user_id,),
         )
     ]
-    unread = sum(1 for row in rows if row["read_at"] is None)
+    unread = int(
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL",
+            (user_id,),
+        ).fetchone()["n"]
+    )
     return {"items": rows, "unread": unread}
 
 
@@ -810,7 +841,7 @@ def tick_all(
     return {"jobs": jobs, "outbox": outbox, "odds": odds, "scores": scores}
 
 
-def _open_or_draft_week(conn: sqlite3.Connection, season: int | None) -> dict[str, Any] | None:
+def open_or_draft_week(conn: sqlite3.Connection, season: int | None = None) -> dict[str, Any] | None:
     season = season or Config.SEASON
     row = conn.execute(
         """
