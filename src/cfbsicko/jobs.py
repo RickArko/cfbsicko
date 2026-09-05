@@ -299,14 +299,15 @@ def _run_job(conn: sqlite3.Connection, job: dict[str, Any], now: datetime) -> No
 
 def tick_outbox(conn: sqlite3.Connection, now: datetime, send: SendFn) -> int:
     now = _as_aware(now)
-    rows = conn.execute(
+rows = conn.execute(
         """
         SELECT * FROM mail_outbox
         WHERE sent_at IS NULL AND locked_at IS NULL AND attempts < ?
-        ORDER BY id
+          AND datetime(send_after) <= datetime(?)
+        ORDER BY datetime(send_after), id
         LIMIT ?
         """,
-        (OUTBOX_MAX_ATTEMPTS, OUTBOX_BATCH),
+        (OUTBOX_MAX_ATTEMPTS, now.isoformat(), OUTBOX_BATCH),
     ).fetchall()
     sent = 0
     for row in rows:
