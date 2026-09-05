@@ -81,13 +81,7 @@ const lastSynced = ref([]);
 const pickResults = computed(() => {
   const rows = savedPicks.value.filter((p) => p.result && p.result !== "pending");
   if (!rows.length) return "";
-return rows.map((p) => {
-    const game = games.value.find((g) => g.id === p.game_id);
-    const label = p.market === "total"
-      ? `${p.side === "over" ? "Over" : "Under"} ${game?.total ?? ""}`
-      : (p.side === "home" ? game?.home : game?.away);
-    return `${label || "Pick"} ${p.result}`;
-  }).join(" · ");
+  return rows.map((p) => `${pickResultLabel(p)} ${p.result}`).join(" · ");
 });
 
 const countdown = computed(() => {
@@ -99,6 +93,13 @@ const countdown = computed(() => {
   return `${h}h ${m}m to lock`;
 });
 
+function pickResultLabel(p) {
+  if (p.market === "total") {
+    const side = p.side === "over" ? "Over" : "Under";
+    return `${p.away}/${p.home} ${side}`;
+  }
+  return p.side === "home" ? p.home || "" : p.away || "";
+}
 function homeSpread(game) {
   const n = game.spread_home;
   return `${n > 0 ? "+" : ""}${n}`;

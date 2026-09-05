@@ -220,11 +220,11 @@ def line_moved_body(
 ) -> tuple[str, str]:
     matchup = f"{away} / {home}"
     subject = f"Line moved: {matchup}"
-if market == "spread":
+    if market == "spread":
         picked_team = home if side == "home" else away
         shown_legal = legal if side == "home" else -legal
         shown_market = market_line if side == "home" else -market_line
-        current = f"{picked_team} spread is now {_signed_spread(shown_market)}"
+        current = f"{picked_team} is now {_signed_spread(shown_market)}"
         locked = _signed_spread(shown_legal)
     else:
         current = f"{matchup} total is now {market_line:g}"

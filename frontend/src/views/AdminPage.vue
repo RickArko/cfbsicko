@@ -36,7 +36,7 @@
       <textarea v-model="slate" rows="10" style="margin: 0.6rem 0"></textarea>
       <div class="row">
         <button type="button" @click="publish(false)">Publish</button>
-        <button class="ghost" type="button" @click="ingest">Ingest draft</button>
+        <button class="ghost" type="button" @click="ingest(false)">Ingest draft</button>
         <button class="ghost" type="button" @click="freeze">Freeze lines</button>
       </div>
       <p v-if="weekStatus" class="muted">{{ weekStatus }}</p>
@@ -165,16 +165,20 @@ async function publish(force) {
   }
 }
 
-async function ingest() {
+async function ingest(force) {
   try {
     await api(`/api/admin/weeks/${weekNo.value}/ingest`, {
       method: "POST",
       token: props.token,
-      body: { lock_at: lockAt.value, force: false },
+      body: { lock_at: lockAt.value, force: Boolean(force) },
     });
     note.value = "Draft ingested. Freeze to open the week.";
     await load();
   } catch (exc) {
+    if (exc.status === 409 && !force && window.confirm(`${exc.message} Replace anyway?`)) {
+      await ingest(true);
+      return;
+    }
     note.value = exc.message;
   }
 }

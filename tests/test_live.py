@@ -268,7 +268,8 @@ def test_line_moved_only_holders_pre_lock(imported, clock, commish_headers):
         holders = [row for row in sent if row[0] == "holder@example.com" and "Line moved" in row[1]]
         others = [row for row in sent if row[0] == "otherp@example.com" and "Line moved" in row[1]]
         assert len(holders) == 1
-        assert "20.5" in holders[0][2]
+        assert "Houston is now +22" in holders[0][2]
+        assert "+20.5" in holders[0][2]
         assert others == []
         clock["now"] = clock["now"].replace(day=10, hour=19)
         sent.clear()
@@ -281,12 +282,15 @@ def test_line_moved_only_holders_pre_lock(imported, clock, commish_headers):
 def test_ingest_refuses_week_with_picks(imported, clock, commish_headers):
     app, _ = _live_app(imported, clock)
     with TestClient(app) as client:
+        before = client.get("/api/weeks/1", headers=commish_headers).json()["week"]["lock_at"]
         r = client.post(
             "/api/admin/weeks/1/ingest",
-            json={"lock_at": "2026-09-03T18:00:00-04:00"},
+            json={"lock_at": "2026-09-10T18:00:00-04:00"},
             headers=commish_headers,
         )
         assert r.status_code == 409, r.text
+        after = client.get("/api/weeks/1", headers=commish_headers).json()["week"]["lock_at"]
+        assert after == before
 
 
 def test_empty_cron_is_404(client):
@@ -447,3 +451,259 @@ def test_pick_line_keeps_plus_on_dog():
     ]
     _, fav_body = lineup_saved_body(week_title="Week 2", before=[], after=favorite, app_url="http://t")
     assert "Florida State -3.5" in fav_body
+
+
+def test_migrate_live_adds_nullable_updated_at(tmp_path):
+    import sqlite3
+
+    from cfbsicko.live import migrate_live
+
+    conn = sqlite3.connect(tmp_path / "legacy-results.db")
+    conn.executescript(
+        """
+        CREATE TABLE games (id INTEGER PRIMARY KEY);
+        CREATE TABLE game_results (
+            game_id INTEGER PRIMARY KEY,
+            home_score INTEGER NOT NULL,
+            away_score INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual'
+        );
+        INSERT INTO game_results (game_id, home_score, away_score, source) VALUES (1, 21, 17, 'manual');
+        """
+    )
+    migrate_live(conn)
+    cols = {row[1]: row[4] for row in conn.execute("PRAGMA table_info(game_results)")}
+    conn.close()
+    assert "updated_at" in cols
+    assert cols["updated_at"] is None
+
+
+def test_connect_does_not_clear_fresh_outbox_lock(imported, clock):
+    import json
+
+    from cfbsicko.db import connect
+
+    setup = connect(imported)
+    week_id = int(setup.execute("SELECT id FROM weeks ORDER BY id LIMIT 1").fetchone()[0])
+    setup.execute(
+        """
+        INSERT INTO mail_outbox (kind, week_id, to_email, payload_json, dedupe_key, send_after, locked_at)
+        VALUES ('held', ?, 'held@example.com', ?, 'held', ?, ?)
+        """,
+        (
+            week_id,
+            json.dumps({"subject": "s", "body": "b"}),
+            (clock["now"] - timedelta(minutes=1)).isoformat(),
+            clock["now"].isoformat(),
+        ),
+    )
+    setup.commit()
+    setup.close()
+    again = connect(imported)
+    row = again.execute("SELECT locked_at FROM mail_outbox WHERE dedupe_key = 'held'").fetchone()
+    again.close()
+    assert row["locked_at"] is not None
+
+
+def test_stale_outbox_lock_is_reclaimed(imported, clock):
+    import json
+
+    from cfbsicko.db import connect
+    from cfbsicko.jobs import tick_outbox
+
+    conn = connect(imported)
+    week_id = int(conn.execute("SELECT id FROM weeks ORDER BY id LIMIT 1").fetchone()[0])
+    conn.execute(
+        """
+        INSERT INTO mail_outbox (kind, week_id, to_email, payload_json, dedupe_key, send_after, locked_at)
+        VALUES ('stale', ?, 'stale@example.com', ?, 'stale', ?, ?)
+        """,
+        (
+            week_id,
+            json.dumps({"subject": "s", "body": "b"}),
+            (clock["now"] - timedelta(minutes=1)).isoformat(),
+            (clock["now"] - timedelta(minutes=5)).isoformat(),
+        ),
+    )
+    conn.commit()
+    sent: list[str] = []
+
+    def send(to, subject, body, html=None):
+        sent.append(to)
+        return "smtp"
+
+    assert tick_outbox(conn, clock["now"], send) == 1
+    assert sent == ["stale@example.com"]
+    conn.close()
+
+
+def test_outbox_due_filter_does_not_starve_new_mail(imported, clock):
+    import json
+
+    from cfbsicko.db import connect
+    from cfbsicko.jobs import tick_outbox
+
+    conn = connect(imported)
+    week_id = int(conn.execute("SELECT id FROM weeks ORDER BY id LIMIT 1").fetchone()[0])
+    payload = json.dumps({"subject": "s", "body": "b"})
+    future = (clock["now"] + timedelta(hours=1)).isoformat()
+    due = (clock["now"] - timedelta(minutes=1)).isoformat()
+    for i in range(20):
+        conn.execute(
+            """
+            INSERT INTO mail_outbox (kind, week_id, to_email, payload_json, dedupe_key, send_after)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (f"retry{i}", week_id, f"r{i}@example.com", payload, f"retry{i}", future),
+        )
+    conn.execute(
+        """
+        INSERT INTO mail_outbox (kind, week_id, to_email, payload_json, dedupe_key, send_after)
+        VALUES ('due', ?, 'due@example.com', ?, 'due', ?)
+        """,
+        (week_id, payload, due),
+    )
+    conn.commit()
+    sent: list[str] = []
+
+    def send(to, subject, body, html=None):
+        sent.append(to)
+        return "smtp"
+
+    assert tick_outbox(conn, clock["now"], send) == 1
+    assert sent == ["due@example.com"]
+    conn.close()
+
+
+def test_partial_grade_skips_in_progress(imported, clock, commish_headers):
+    clock["now"] = clock["now"].replace(year=2026, month=9, day=10, hour=12)
+    feed = StaticFeed(
+        [
+            FeedGame(
+                "Houston",
+                "Oklahoma",
+                -20.5,
+                54.5,
+                "hou-okl",
+                home_score=7,
+                away_score=14,
+                status="in_progress",
+            ),
+            FeedGame("Purdue", "Indiana State", -14.5, 57.5, "pur-isu"),
+            FeedGame("SMU", "Florida State", -3.5, 53.5, "smu-fsu"),
+            FeedGame("Colorado", "Georgia Tech", -6.5, 50.5, "col-gt"),
+            FeedGame("Washington State", "Ole Miss", -23.5, 61.5, "wsu-om"),
+        ]
+    )
+    app, _ = _live_app(imported, clock, feed=feed)
+    with TestClient(app) as client:
+        invite(client, commish_headers, "live@example.com", "Live")
+        client.post(
+            "/api/admin/weeks/2/ingest",
+            json={"lock_at": "2026-09-10T18:00:00-04:00"},
+            headers=commish_headers,
+        )
+        frozen = client.post("/api/admin/weeks/2/freeze", headers=commish_headers)
+        games = frozen.json()["games"]
+        headers = auth_header("live-sub", "live@example.com")
+        saved = client.put("/api/weeks/2/picks", json={"picks": _five(games)}, headers=headers)
+        assert saved.status_code == 200, saved.text
+        clock["now"] = clock["now"].replace(day=11, hour=20)
+        client.post("/api/internal/tick", headers={"X-Cron-Token": "tick"})
+        mid = client.get("/api/weeks/2", headers=headers).json()
+    assert mid["my_picks"][0]["result"] == "pending"
+
+
+def test_manual_score_is_not_overwritten_by_feed(imported, clock, commish_headers):
+    from cfbsicko.jobs import tick_scores
+    from cfbsicko.store import set_game_result
+
+    clock["now"] = clock["now"].replace(year=2026, month=9, day=11, hour=20)
+    feed = StaticFeed(
+        [
+            FeedGame(
+                "Houston",
+                "Oklahoma",
+                -20.5,
+                54.5,
+                "hou-okl",
+                home_score=99,
+                away_score=0,
+                status="final",
+            ),
+            FeedGame("Purdue", "Indiana State", -14.5, 57.5, "pur-isu"),
+            FeedGame("SMU", "Florida State", -3.5, 53.5, "smu-fsu"),
+            FeedGame("Colorado", "Georgia Tech", -6.5, 50.5, "col-gt"),
+            FeedGame("Washington State", "Ole Miss", -23.5, 61.5, "wsu-om"),
+        ]
+    )
+    app, _ = _live_app(imported, clock, feed=feed)
+    with TestClient(app) as client:
+        client.post(
+            "/api/admin/weeks/2/ingest",
+            json={"lock_at": "2026-09-10T18:00:00-04:00"},
+            headers=commish_headers,
+        )
+        frozen = client.post("/api/admin/weeks/2/freeze", headers=commish_headers)
+        game_id = frozen.json()["games"][0]["id"]
+        set_game_result(
+            app.state.conn, game_id, home_score=14, away_score=42, entered_by=None, source="manual"
+        )
+        tick_scores(app.state.conn, clock["now"], feed)
+        row = app.state.conn.execute(
+            "SELECT home_score, away_score, source FROM game_results WHERE game_id = ?",
+            (game_id,),
+        ).fetchone()
+    assert (row["home_score"], row["away_score"], row["source"]) == (14, 42, "manual")
+
+
+def test_remind_missing_stays_in_active_league(imported, clock, commish_headers):
+    app, sent = _live_app(imported, clock)
+    with TestClient(app) as client:
+        invite(client, commish_headers, "default@example.com", "Default")
+        created = client.post(
+            "/api/admin/leagues",
+            json={"name": "Arrive 2026", "buy_in": 75},
+            headers=commish_headers,
+        )
+        assert created.status_code == 200, created.text
+        side = created.json()
+        side_headers = {**commish_headers, "X-League-Id": str(side["id"])}
+        invite(client, side_headers, "arrive@example.com", "Arrive")
+        client.get("/api/me", headers=auth_header("default-sub", "default@example.com"))
+        client.get("/api/me", headers=auth_header("arrive-sub", "arrive@example.com"))
+        pub = client.post(
+            "/api/admin/weeks",
+            json={"week_no": 2, "lock_at": "2026-09-10T18:00:00-04:00", "slate_text": SLATE5},
+            headers=commish_headers,
+        )
+        assert pub.status_code == 200, pub.text
+        sent.clear()
+        mailed = client.post("/api/admin/weeks/2/mail/reminder", headers=side_headers)
+        assert mailed.status_code == 200, mailed.text
+    assert any(row[0] == "arrive@example.com" for row in sent)
+    assert not any(row[0] == "default@example.com" for row in sent)
+
+
+def test_default_feed_wires_cfbd_when_key_present():
+    from cfbsicko.feed import CfbdFeed, EmptyFeed, default_feed
+
+    assert isinstance(default_feed(""), EmptyFeed)
+    lines = [
+        {
+            "id": 401,
+            "awayTeam": "Houston",
+            "homeTeam": "Oklahoma",
+            "startDate": "2026-09-10T23:00:00+00:00",
+            "lines": [{"provider": "consensus", "spread": -20.5, "overUnder": 54.5}],
+        }
+    ]
+
+    def get_json(path, params):
+        return lines if path == "/lines" else []
+
+    feed = CfbdFeed("k", get_json=get_json)
+    slate = feed.slate(2026, 2)
+    assert slate[0].away == "Houston"
+    assert slate[0].spread_home == -20.5
+    assert slate[0].provider_game_id == "401"

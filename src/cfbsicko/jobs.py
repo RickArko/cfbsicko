@@ -35,6 +35,7 @@ SendFn = Callable[..., str]
 LINE_MOVE_DELTA = 0.5
 OUTBOX_BATCH = 20
 OUTBOX_MAX_ATTEMPTS = 8
+LOCK_STALE = timedelta(minutes=2)
 
 
 def _as_aware(value: datetime) -> datetime:
@@ -124,10 +125,15 @@ def enqueue_mail(
     return inserted
 
 
-def enqueue_lock_warnings(conn: sqlite3.Connection, week: dict[str, Any]) -> int:
+def enqueue_lock_warnings(
+    conn: sqlite3.Connection, week: dict[str, Any], *, league_id: int | None = None
+) -> int:
     from cfbsicko.leagues import default_league_id
 
-    leagues = [dict(row) for row in conn.execute("SELECT id FROM leagues")]
+    if league_id is not None:
+        leagues = [{"id": league_id}]
+    else:
+        leagues = [dict(row) for row in conn.execute("SELECT id FROM leagues")]
     if not leagues:
         leagues = [{"id": default_league_id(conn)}]
     sent = 0
@@ -241,8 +247,29 @@ def _pick_counts(conn: sqlite3.Connection, week_id: int, league_id: int) -> list
     return [dict(row) for row in rows]
 
 
+def _unlock_stale(conn: sqlite3.Connection, now: datetime) -> None:
+    cutoff = (now - LOCK_STALE).isoformat()
+    conn.execute(
+        """
+        UPDATE scheduled_jobs
+        SET locked_at = NULL
+        WHERE status = 'pending' AND locked_at IS NOT NULL AND locked_at < ?
+        """,
+        (cutoff,),
+    )
+    conn.execute(
+        """
+        UPDATE mail_outbox
+        SET locked_at = NULL
+        WHERE sent_at IS NULL AND locked_at IS NOT NULL AND locked_at < ?
+        """,
+        (cutoff,),
+    )
+
+
 def tick_jobs(conn: sqlite3.Connection, now: datetime) -> int:
     now = _as_aware(now)
+    _unlock_stale(conn, now)
     rows = conn.execute(
         "SELECT * FROM scheduled_jobs WHERE status = 'pending' AND locked_at IS NULL ORDER BY run_at"
     ).fetchall()
@@ -299,12 +326,13 @@ def _run_job(conn: sqlite3.Connection, job: dict[str, Any], now: datetime) -> No
 
 def tick_outbox(conn: sqlite3.Connection, now: datetime, send: SendFn) -> int:
     now = _as_aware(now)
-rows = conn.execute(
+    _unlock_stale(conn, now)
+    rows = conn.execute(
         """
         SELECT * FROM mail_outbox
         WHERE sent_at IS NULL AND locked_at IS NULL AND attempts < ?
-          AND datetime(send_after) <= datetime(?)
-        ORDER BY datetime(send_after), id
+          AND send_after <= ?
+        ORDER BY send_after, id
         LIMIT ?
         """,
         (OUTBOX_MAX_ATTEMPTS, now.isoformat(), OUTBOX_BATCH),
@@ -538,6 +566,8 @@ def tick_scores(
         item = by_id.get(str(game["provider_game_id"]))
         if item is None or item.home_score is None or item.away_score is None:
             continue
+        if (game.get("result_source") or "") == "manual":
+            continue
         status = item.status or "in_progress"
         if (
             (game.get("game_status") or "") == "final"
@@ -578,6 +608,20 @@ def ingest_draft(
     if not games:
         raise ValueError("feed returned no games")
     season = season or Config.SEASON
+    existing = conn.execute(
+        "SELECT id FROM weeks WHERE season = ? AND week_no = ?",
+        (season, week_no),
+    ).fetchone()
+    if existing is not None:
+        existing_picks = int(
+            conn.execute("SELECT COUNT(*) AS n FROM picks WHERE week_id = ?", (existing["id"],)).fetchone()[
+                "n"
+            ]
+        )
+        if existing_picks and not force:
+            raise SlateConflictError(
+                f"Week {week_no} already has {existing_picks} picks. Refusing to replace live data."
+            )
     conn.execute(
         """
         INSERT INTO weeks (season, week_no, title, lock_at, status)
@@ -592,10 +636,6 @@ def ingest_draft(
     existing_picks = int(
         conn.execute("SELECT COUNT(*) AS n FROM picks WHERE week_id = ?", (week["id"],)).fetchone()["n"]
     )
-    if existing_picks and not force:
-        raise SlateConflictError(
-            f"Week {week_no} already has {existing_picks} picks. Refusing to replace live data."
-        )
     if existing_picks and force:
         conn.execute("DELETE FROM picks WHERE week_id = ?", (week["id"],))
     conn.execute(

@@ -16,7 +16,7 @@ RESULT_COLUMNS = (
     ("status", "TEXT NOT NULL DEFAULT 'final'"),
     ("period", "TEXT"),
     ("clock", "TEXT"),
-    ("updated_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+    ("updated_at", "TEXT"),
 )
 
 LIVE_TABLES = """
@@ -100,7 +100,3 @@ def migrate_live(conn: sqlite3.Connection) -> None:
     _add_columns(conn, "game_results", RESULT_COLUMNS)
     conn.executescript(LIVE_TABLES)
     _add_columns(conn, "mail_outbox", (("locked_at", "TEXT"),))
-    conn.execute(
-        "UPDATE scheduled_jobs SET locked_at = NULL WHERE status = 'pending' AND locked_at IS NOT NULL"
-    )
-    conn.execute("UPDATE mail_outbox SET locked_at = NULL WHERE sent_at IS NULL AND locked_at IS NOT NULL")

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from cfbsicko.auth import AuthenticatedUser, check_local_password, get_auth_user, mint_local_token
 from cfbsicko.config import Config
 from cfbsicko.db import connect
-from cfbsicko.feed import EmptyFeed
+from cfbsicko.feed import default_feed
 from cfbsicko.leagues import (
     add_member,
     create_league,
@@ -246,7 +246,7 @@ def create_app(
     app.state.db_path = db_path or Config.database_path()
     app.state.now_fn = now_fn or _now_utc
     app.state.mail_send = mail_send
-    app.state.feed = feed if feed is not None else EmptyFeed()
+    app.state.feed = feed if feed is not None else default_feed()
     app.state.cron_token = cron_token if cron_token is not None else Config.CRON_TOKEN
     app.state.limiter = RateLimiter()
     app.add_middleware(
@@ -756,7 +756,7 @@ def create_app(
         from cfbsicko.jobs import enqueue_lock_warnings
 
         week = get_week(db(), week_no)
-        queued = enqueue_lock_warnings(db(), week)
+        queued = enqueue_lock_warnings(db(), week, league_id=int(league["id"]))
         db().commit()
         _flush_outbox()
         return {"sent": queued}

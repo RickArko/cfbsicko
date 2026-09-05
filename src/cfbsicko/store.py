@@ -78,7 +78,7 @@ def list_games(conn: sqlite3.Connection, week_id: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT g.*, r.home_score, r.away_score,
-            r.status AS game_status, r.period, r.clock
+            r.status AS game_status, r.period, r.clock, r.source AS result_source
         FROM games g
         LEFT JOIN game_results r ON r.game_id = g.id
         WHERE g.week_id = ?
@@ -464,6 +464,9 @@ def grade_week(
     for pick in picks:
         game = games[pick["game_id"]]
         if game["home_score"] is None or game["away_score"] is None:
+            continue
+        status = game.get("game_status") or "final"
+        if partial and status != "final":
             continue
         result = result_for_pick(
             market=pick["market"],
