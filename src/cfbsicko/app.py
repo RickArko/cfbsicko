@@ -405,12 +405,16 @@ def create_app(
             raise HTTPException(status_code=403, detail="Bad cron token")
         from cfbsicko.jobs import tick_all
 
-        return tick_all(
-            db(),
-            now(),
-            lambda to, subject, body, html=None: _dispatch_mail(app, to, subject, body, html=html),
-            feed=app.state.feed,
-        )
+        conn = connect(app.state.db_path)
+        try:
+            return tick_all(
+                conn,
+                now(),
+                lambda to, subject, body, html=None: _dispatch_mail(app, to, subject, body, html=html),
+                feed=app.state.feed,
+            )
+        finally:
+            conn.close()
 
     def _week_payload(week: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
         writable = week_is_writable(week, now())
@@ -659,16 +663,20 @@ def create_app(
         return {"ok": True}
 
     @app.get("/api/admin/live")
-    def admin_live(user: dict[str, Any] = Depends(commish)):
+    def admin_live(
+        user: dict[str, Any] = Depends(commish),
+        league: dict[str, Any] = Depends(active_league),
+    ):
         from cfbsicko.jobs import open_or_draft_week, outbox_failures, unmatched_games
 
         week = open_or_draft_week(db()) or current_week(db())
+        failures = outbox_failures(db(), league_id=int(league["id"]))
         if week is None:
-            return {"week": None, "unmatched": [], "outbox_failures": outbox_failures(db())}
+            return {"week": None, "unmatched": [], "outbox_failures": failures}
         return {
             "week": week,
             "unmatched": unmatched_games(db(), int(week["id"])),
-            "outbox_failures": outbox_failures(db()),
+            "outbox_failures": failures,
         }
 
     @app.patch("/api/admin/weeks/{week_no}")

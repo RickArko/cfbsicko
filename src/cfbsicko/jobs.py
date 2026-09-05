@@ -310,6 +310,8 @@ def _run_job(conn: sqlite3.Connection, job: dict[str, Any], now: datetime) -> No
         return
     week_d = dict(week)
     if job["kind"] == "lock_warning_1h":
+        if week_d.get("status") != "open" or _parse_when(week_d["lock_at"]) <= now:
+            return
         enqueue_lock_warnings(conn, week_d)
         return
     if job["kind"] == "lock_snapshot":
@@ -411,6 +413,7 @@ def tick_odds(
     season: int | None = None,
 ) -> int:
     now = _as_aware(now)
+    _prune_old_ticks(conn, now)
     if not in_odds_window(now):
         return 0
     week = open_or_draft_week(conn, season)
@@ -480,7 +483,6 @@ def tick_odds(
             if week_is_writable(week, now):
                 _enqueue_line_moved(conn, week, game, item)
         moved += 1
-    _prune_old_ticks(conn, week, now)
     conn.commit()
     return moved
 
@@ -528,19 +530,15 @@ def _enqueue_line_moved(
         )
 
 
-def _prune_old_ticks(conn: sqlite3.Connection, week: dict[str, Any], now: datetime) -> None:
-    lock_at = week.get("lock_at")
-    if not lock_at:
-        return
-    if _parse_when(lock_at) > now:
-        return
+def _prune_old_ticks(conn: sqlite3.Connection, now: datetime) -> None:
     conn.execute(
         """
         DELETE FROM line_ticks WHERE game_id IN (
-            SELECT id FROM games WHERE week_id = ?
-        ) AND captured_at < ?
+            SELECT g.id FROM games g JOIN weeks w ON w.id = g.week_id
+            WHERE w.lock_at IS NOT NULL AND datetime(w.lock_at) <= datetime(?)
+        )
         """,
-        (week["id"], lock_at),
+        (now.isoformat(),),
     )
 
 
@@ -617,6 +615,15 @@ def _latest_graded_week(conn: sqlite3.Connection, season: int | None) -> dict[st
     return dict(row) if row else None
 
 
+def clear_week_derived_state(conn: sqlite3.Connection, week_id: int) -> None:
+    for table in ("scheduled_jobs", "week_snapshots", "pick_revisions", "mail_outbox"):
+        conn.execute(f"DELETE FROM {table} WHERE week_id = ?", (week_id,))
+    conn.execute(
+        "DELETE FROM line_ticks WHERE game_id IN (SELECT id FROM games WHERE week_id = ?)",
+        (week_id,),
+    )
+
+
 def ingest_draft(
     conn: sqlite3.Connection,
     *,
@@ -663,6 +670,7 @@ def ingest_draft(
     )
     if existing_picks and force:
         conn.execute("DELETE FROM picks WHERE week_id = ?", (week["id"],))
+    clear_week_derived_state(conn, int(week["id"]))
     conn.execute("DELETE FROM week_records WHERE week_id = ?", (week["id"],))
     conn.execute(
         "DELETE FROM game_results WHERE game_id IN (SELECT id FROM games WHERE week_id = ?)",
@@ -752,17 +760,39 @@ def unmatched_games(conn: sqlite3.Connection, week_id: int) -> list[dict[str, An
     return [dict(row) for row in rows]
 
 
-def outbox_failures(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT id, kind, to_email, attempts, last_error, send_after
-        FROM mail_outbox
-        WHERE last_error IS NOT NULL
-        ORDER BY id DESC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
+def outbox_failures(
+    conn: sqlite3.Connection, *, league_id: int | None = None, limit: int = 20
+) -> list[dict[str, Any]]:
+    if league_id is None:
+        rows = conn.execute(
+            """
+            SELECT id, kind, to_email, attempts, last_error, send_after
+            FROM mail_outbox
+            WHERE last_error IS NOT NULL
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, kind, to_email, attempts, last_error, send_after
+            FROM mail_outbox
+            WHERE last_error IS NOT NULL
+              AND (
+                league_id = ?
+                OR to_email IN (
+                    SELECT u.email FROM users u
+                    JOIN league_members m ON m.user_id = u.id
+                    WHERE m.league_id = ?
+                )
+              )
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (league_id, league_id, limit),
+        ).fetchall()
     return [dict(row) for row in rows]
 
 

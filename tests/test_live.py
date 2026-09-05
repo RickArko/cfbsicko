@@ -1007,3 +1007,181 @@ def test_cfbd_scoreboard_parses_nested_teams_and_keeps_flat_fallback():
     assert flat[0].away == "Purdue"
     assert flat[0].home_score == 21
     assert flat[0].status == "final"
+
+
+def test_internal_tick_uses_dedicated_connection(imported, clock, commish_headers):
+    from cfbsicko import jobs as jobs_mod
+
+    seen = {}
+    real_tick_all = jobs_mod.tick_all
+
+    def spy_tick_all(conn, now, send, feed=None):
+        seen["conn"] = conn
+        return {"jobs": 0, "outbox": 0, "odds": 0, "scores": 0}
+
+    jobs_mod.tick_all = spy_tick_all
+    app, _ = _live_app(imported, clock)
+    try:
+        with TestClient(app) as client:
+            client.get("/api/weeks/1", headers=commish_headers)
+            shared = app.state.conn
+            assert shared is not None
+            r = client.post("/api/internal/tick", headers={"X-Cron-Token": "tick"})
+            assert r.status_code == 200, r.text
+    finally:
+        jobs_mod.tick_all = real_tick_all
+    assert seen["conn"] is not shared
+
+
+def test_outbox_failures_are_scoped_to_league(imported, clock, commish_headers):
+    app, _ = _live_app(imported, clock)
+    with TestClient(app) as client:
+        invite(client, commish_headers, "home@example.com", "Home")
+        created = client.post(
+            "/api/admin/leagues",
+            json={"name": "Side", "buy_in": 75},
+            headers=commish_headers,
+        )
+        assert created.status_code == 200, created.text
+        side_id = created.json()["id"]
+        side_headers = {**commish_headers, "X-League-Id": str(side_id)}
+        invite(client, side_headers, "side@example.com", "Side")
+        client.get("/api/me", headers=auth_header("home-sub", "home@example.com"))
+        client.get("/api/me", headers=auth_header("side-sub", "side@example.com"))
+
+        conn = app.state.conn
+        home_league = conn.execute("SELECT id FROM leagues ORDER BY id LIMIT 1").fetchone()[0]
+
+        def failing(kind, league_id, email, key):
+            conn.execute(
+                "INSERT INTO mail_outbox (kind, week_id, league_id, to_email, payload_json,"
+                " dedupe_key, send_after, attempts, last_error)"
+                " VALUES (?, NULL, ?, ?, '{}', ?, '2026-01-01T00:00:00+00:00', 1, 'boom')",
+                (kind, league_id, email, key),
+            )
+
+        failing("slate", home_league, "home@example.com", "home-1")
+        failing("slate", side_id, "side@example.com", "side-1")
+        failing("slate", None, "home@example.com", "home-2")
+        conn.commit()
+
+        home_view = client.get("/api/admin/live", headers=commish_headers).json()
+        side_view = client.get("/api/admin/live", headers=side_headers).json()
+        home_emails = {row["to_email"] for row in home_view["outbox_failures"]}
+        side_emails = {row["to_email"] for row in side_view["outbox_failures"]}
+    assert home_emails == {"home@example.com", "side@example.com"}
+    assert side_emails == {"side@example.com"}
+
+
+def test_overdue_lock_warning_is_skipped(imported, clock, commish_headers):
+    app, sent = _live_app(imported, clock)
+    with TestClient(app) as client:
+        moved = client.patch(
+            "/api/admin/weeks/1",
+            json={"lock_at": "2026-09-03T12:00:00-04:00"},
+            headers=commish_headers,
+        )
+        assert moved.status_code == 200, moved.text
+        client.post("/api/internal/tick", headers={"X-Cron-Token": "tick"})
+        jobs = app.state.conn.execute("SELECT kind, status FROM scheduled_jobs ORDER BY kind").fetchall()
+    assert sent == []
+    assert {row["kind"]: row["status"] for row in jobs}["lock_warning_1h"] == "done"
+
+
+def test_locked_week_line_ticks_are_pruned(imported, clock, commish_headers):
+    clock["now"] = clock["now"].replace(year=2026, month=9, day=8, hour=12)
+    feed = StaticFeed(list(FEED5))
+    app, _ = _live_app(imported, clock, feed=feed)
+    with TestClient(app) as client:
+        client.post(
+            "/api/admin/weeks/2/ingest",
+            json={"lock_at": "2026-09-10T18:00:00-04:00"},
+            headers=commish_headers,
+        )
+        client.post("/api/admin/weeks/2/freeze", headers=commish_headers)
+        feed.games[0] = FeedGame("Houston", "Oklahoma", -22.0, 54.5, "hou-okl", day_label="Thursday")
+        assert tick_odds(app.state.conn, clock["now"], feed) >= 1
+        assert app.state.conn.execute("SELECT COUNT(*) FROM line_ticks").fetchone()[0] >= 1
+
+        clock["now"] = clock["now"].replace(day=10, hour=19)
+        assert tick_odds(app.state.conn, clock["now"], feed) == 0
+        assert app.state.conn.execute("SELECT COUNT(*) FROM line_ticks").fetchone()[0] == 0
+
+
+def test_force_replace_clears_jobs_snapshots_revisions_outbox(imported, clock, commish_headers):
+    app, _ = _live_app(imported, clock)
+    with TestClient(app) as client:
+        client.get("/api/weeks/1", headers=commish_headers)
+        conn = app.state.conn
+        week_id = conn.execute("SELECT id FROM weeks WHERE week_no = 1").fetchone()[0]
+        user_id = conn.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+
+        def seed_derived():
+            conn.execute(
+                "INSERT INTO scheduled_jobs (week_id, kind, run_at, status)"
+                " VALUES (?, 'lock_snapshot', '2026-09-03T18:00:00-04:00', 'done')",
+                (week_id,),
+            )
+            conn.execute(
+                "INSERT INTO week_snapshots (week_id, kind, payload_json) VALUES (?, 'lock', '{}')",
+                (week_id,),
+            )
+            conn.execute(
+                "INSERT INTO pick_revisions (user_id, week_id, payload_json) VALUES (?, ?, '[]')",
+                (user_id, week_id),
+            )
+            conn.execute(
+                "INSERT INTO mail_outbox (kind, week_id, to_email, payload_json, dedupe_key, send_after)"
+                " VALUES ('slate', ?, 'x@example.com', '{}', 'seed', '2026-01-01T00:00:00+00:00')",
+                (week_id,),
+            )
+            game_id = conn.execute("SELECT id FROM games WHERE week_id = ? LIMIT 1", (week_id,)).fetchone()[0]
+            conn.execute(
+                "INSERT INTO line_ticks (game_id, captured_at, spread_home, total, source)"
+                " VALUES (?, '2026-09-01T10:00:00-04:00', -20.5, 54.5, 'feed')",
+                (game_id,),
+            )
+            conn.commit()
+
+        def derived_counts():
+            return {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table} WHERE week_id = ?", (week_id,)).fetchone()[
+                    0
+                ]
+                for table in ("scheduled_jobs", "week_snapshots", "pick_revisions", "mail_outbox")
+            }
+
+        seed_derived()
+        ing = client.post(
+            "/api/admin/weeks/1/ingest",
+            json={"lock_at": "2026-09-03T18:00:00-04:00", "force": True},
+            headers=commish_headers,
+        )
+        assert ing.status_code == 200, ing.text
+        assert derived_counts() == {
+            "scheduled_jobs": 0,
+            "week_snapshots": 0,
+            "pick_revisions": 0,
+            "mail_outbox": 0,
+        }
+        assert conn.execute("SELECT COUNT(*) FROM line_ticks").fetchone()[0] == 0
+
+        seed_derived()
+        pub = client.post(
+            "/api/admin/weeks",
+            json={
+                "week_no": 1,
+                "lock_at": "2026-09-03T18:00:00-04:00",
+                "slate_text": SLATE5,
+                "force": True,
+            },
+            headers=commish_headers,
+        )
+        assert pub.status_code == 200, pub.text
+        assert derived_counts() == {
+            "scheduled_jobs": 2,
+            "week_snapshots": 0,
+            "pick_revisions": 0,
+            "mail_outbox": 0,
+        }
+        assert conn.execute("SELECT COUNT(*) FROM line_ticks").fetchone()[0] == 0

@@ -346,6 +346,9 @@ def publish_slate(
     )
     week = get_week(conn, week_no, season)
     conn.execute("DELETE FROM picks WHERE week_id = ?", (week["id"],))
+    from cfbsicko.jobs import clear_week_derived_state
+
+    clear_week_derived_state(conn, int(week["id"]))
     conn.execute("DELETE FROM week_records WHERE week_id = ?", (week["id"],))
     conn.execute(
         "DELETE FROM game_results WHERE game_id IN (SELECT id FROM games WHERE week_id = ?)",
