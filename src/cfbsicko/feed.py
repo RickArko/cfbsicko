@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -18,7 +18,12 @@ log = logging.getLogger("cfbsicko.feed")
 
 CFBD_BASE = "https://api.collegefootballdata.com"
 CFBD_TIMEOUT = 3.0
+ESPN_SCOREBOARD = "https://site.web.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard"
+ESPN_TIMEOUT = 8.0
+# Week 1 Thursday lock (America/New_York). Later weeks are +7 days.
+WEEK1_THURSDAY = {2026: date(2026, 9, 3)}
 GetJson = Callable[[str, dict[str, str]], list[dict[str, Any]]]
+EspnGet = Callable[[str], dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -77,9 +82,64 @@ class StaticFeed:
 
 def default_feed(api_key: str | None = None) -> ScoreOddsFeed:
     key = Config.CFBD_API_KEY if api_key is None else api_key
-    if not key:
-        return EmptyFeed()
-    return CfbdFeed(key)
+    if key:
+        return CfbdFeed(key)
+    return EspnScoreboardFeed()
+
+
+class EspnScoreboardFeed:
+    """Public ESPN scoreboard for draft slates when CFBD is not configured.
+
+    Only games with both a home spread and a total are kept. odds()/scores()
+    stay empty so ticks do not treat these as a live odds provider.
+    """
+
+    def __init__(self, *, get_day: EspnGet | None = None, timeout: float = ESPN_TIMEOUT) -> None:
+        self.timeout = timeout
+        self._get_day = get_day or self._http_day
+
+    def slate(self, season: int, week_no: int) -> list[FeedGame]:
+        seen: set[str] = set()
+        out: list[FeedGame] = []
+        for day in week_slate_dates(season, week_no):
+            payload = self._get_day(day)
+            for event in payload.get("events") or []:
+                game = _espn_event(event)
+                if game is None or game.provider_game_id in seen:
+                    continue
+                seen.add(game.provider_game_id)
+                out.append(game)
+        out.sort(key=lambda game: (game.kickoff or "", game.away, game.home))
+        return out
+
+    def odds(self, provider_ids: list[str]) -> list[FeedGame]:
+        return []
+
+    def scores(self, provider_ids: list[str]) -> list[FeedGame]:
+        return []
+
+    def _http_day(self, yyyymmdd: str) -> dict[str, Any]:
+        url = f"{ESPN_SCOREBOARD}?{urlencode({'dates': yyyymmdd, 'limit': '300', 'seasontype': '2'})}"
+        req = Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 CFBSickoDraft/1.0",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urlopen(req, timeout=self.timeout) as resp:
+                payload = json.loads(resp.read().decode())
+        except Exception:
+            log.exception("espn scoreboard failed")
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+
+def week_slate_dates(season: int, week_no: int) -> list[str]:
+    thu = WEEK1_THURSDAY.get(season) or date(season, 9, 3)
+    thu = thu + timedelta(days=7 * (week_no - 1))
+    return [(thu + timedelta(days=offset)).strftime("%Y%m%d") for offset in range(-1, 5)]
 
 
 class CfbdFeed:
@@ -222,6 +282,41 @@ def _game_status(row: dict[str, Any], *, home_score: Any = None, away_score: Any
     if raw in {"in_progress", "inprogress", "live"} or home_score is not None or away_score is not None:
         return "in_progress"
     return "scheduled"
+
+
+def _espn_event(event: dict[str, Any]) -> FeedGame | None:
+    comps = event.get("competitions") or []
+    if not comps:
+        return None
+    comp = comps[0] if isinstance(comps[0], dict) else {}
+    teams = {row.get("homeAway"): row for row in (comp.get("competitors") or []) if isinstance(row, dict)}
+    away = _espn_team_name(teams.get("away"))
+    home = _espn_team_name(teams.get("home"))
+    gid = event.get("id") or comp.get("id")
+    odds_rows = comp.get("odds") or []
+    odds = odds_rows[0] if odds_rows and isinstance(odds_rows[0], dict) else {}
+    spread = odds.get("spread")
+    total = odds.get("overUnder")
+    if not away or not home or gid is None or spread is None or total is None:
+        return None
+    kickoff = event.get("date") or comp.get("date")
+    return FeedGame(
+        away=away,
+        home=home,
+        spread_home=float(spread),
+        total=float(total),
+        provider_game_id=str(gid),
+        kickoff=str(kickoff) if kickoff else None,
+        day_label=_day_label(kickoff),
+    )
+
+
+def _espn_team_name(row: dict[str, Any] | None) -> str | None:
+    if not row:
+        return None
+    team = row.get("team") if isinstance(row.get("team"), dict) else {}
+    name = team.get("location") or team.get("shortDisplayName") or team.get("displayName")
+    return str(name).strip() if name else None
 
 
 def _day_label(value: Any) -> str:

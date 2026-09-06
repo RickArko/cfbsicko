@@ -672,9 +672,10 @@ def create_app(
         week = open_or_draft_week(db()) or current_week(db())
         failures = outbox_failures(db(), league_id=int(league["id"]))
         if week is None:
-            return {"week": None, "unmatched": [], "outbox_failures": failures}
+            return {"week": None, "games": [], "unmatched": [], "outbox_failures": failures}
         return {
             "week": week,
+            "games": list_games(db(), int(week["id"])),
             "unmatched": unmatched_games(db(), int(week["id"])),
             "outbox_failures": failures,
         }

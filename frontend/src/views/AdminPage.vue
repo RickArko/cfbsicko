@@ -41,6 +41,16 @@
       </div>
       <p v-if="weekStatus" class="muted">{{ weekStatus }}</p>
       <p v-if="unmatched.length" class="muted">Unmatched provider ids: {{ unmatched.map((g) => g.away + ' at ' + g.home).join('; ') }}</p>
+      <div v-if="draftGames.length" class="muted" style="margin-top: 0.8rem">
+        <p>
+          <strong>{{ draftGames.length }} draft lines</strong> — market preview, not the legal slate.
+          Players still see the locked week. Freeze Tuesday to open these numbers, or paste the Tuesday
+          email and Publish to replace them.
+        </p>
+        <p v-for="g in draftGames" :key="g.id">
+          {{ g.day_label }} · {{ g.away }} at {{ g.home }} · {{ favoriteLine(g) }} · O/U {{ g.total }}
+        </p>
+      </div>
     </section>
     <section class="card" style="margin-bottom: 1rem">
       <h2>Grade</h2>
@@ -95,6 +105,7 @@ const snapshots = ref([]);
 const note = ref("");
 const weekStatus = ref("");
 const unmatched = ref([]);
+const draftGames = ref([]);
 
 function auth() {
   return { token: props.token };
@@ -119,9 +130,23 @@ async function load() {
     const live = await api("/api/admin/live", auth());
     if (live.week) weekStatus.value = `${live.week.title} · ${live.week.status}`;
     unmatched.value = live.unmatched || [];
+    if (live.week?.status === "draft") {
+      draftGames.value = live.games || [];
+      weekNo.value = live.week.week_no;
+      lockAt.value = live.week.lock_at;
+    } else {
+      draftGames.value = [];
+    }
   } catch {
     unmatched.value = [];
+    draftGames.value = [];
   }
+}
+
+function favoriteLine(game) {
+  const n = Number(game.spread_home);
+  if (Number.isNaN(n)) return "";
+  return n <= 0 ? `${game.home} ${n}` : `${game.away} ${-n}`;
 }
 
 async function createLeague() {

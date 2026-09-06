@@ -686,9 +686,9 @@ def test_remind_missing_stays_in_active_league(imported, clock, commish_headers)
 
 
 def test_default_feed_wires_cfbd_when_key_present():
-    from cfbsicko.feed import CfbdFeed, EmptyFeed, default_feed
+    from cfbsicko.feed import CfbdFeed, EspnScoreboardFeed, default_feed
 
-    assert isinstance(default_feed(""), EmptyFeed)
+    assert isinstance(default_feed(""), EspnScoreboardFeed)
     lines = [
         {
             "id": 401,
@@ -707,6 +707,74 @@ def test_default_feed_wires_cfbd_when_key_present():
     assert slate[0].away == "Houston"
     assert slate[0].spread_home == -20.5
     assert slate[0].provider_game_id == "401"
+
+
+def test_espn_scoreboard_parses_home_spread():
+    from cfbsicko.feed import EspnScoreboardFeed, week_slate_dates
+
+    assert "20260910" in week_slate_dates(2026, 2)
+    payload = {
+        "events": [
+            {
+                "id": "401856678",
+                "date": "2026-09-12T00:00:00Z",
+                "competitions": [
+                    {
+                        "competitors": [
+                            {"homeAway": "away", "team": {"location": "Missouri"}},
+                            {"homeAway": "home", "team": {"location": "Kansas"}},
+                        ],
+                        "odds": [{"spread": 6.5, "overUnder": 51.5, "details": "MIZ -6.5"}],
+                    }
+                ],
+            },
+            {
+                "id": "skip-no-odds",
+                "date": "2026-09-11T00:00:00Z",
+                "competitions": [
+                    {
+                        "competitors": [
+                            {"homeAway": "away", "team": {"location": "Florida A&M"}},
+                            {"homeAway": "home", "team": {"location": "Miami"}},
+                        ],
+                        "odds": [],
+                    }
+                ],
+            },
+        ]
+    }
+    feed = EspnScoreboardFeed(get_day=lambda _day: payload)
+    slate = feed.slate(2026, 2)
+    assert len(slate) == 1
+    assert slate[0].away == "Missouri"
+    assert slate[0].home == "Kansas"
+    assert slate[0].spread_home == 6.5
+    assert slate[0].total == 51.5
+    assert slate[0].day_label == "Friday"
+
+
+def test_ingest_draft_is_review_state_not_current(imported, clock, commish_headers):
+    app, _ = _live_app(imported, clock)
+    with TestClient(app) as client:
+        locked = client.patch("/api/admin/weeks/1", json={"status": "locked"}, headers=commish_headers)
+        assert locked.status_code == 200, locked.text
+        ing = client.post(
+            "/api/admin/weeks/2/ingest",
+            json={"lock_at": "2026-09-10T18:00:00-04:00", "title": "Week 2 — draft, freeze Tuesday"},
+            headers=commish_headers,
+        )
+        assert ing.status_code == 200, ing.text
+        assert ing.json()["week"]["status"] == "draft"
+        current = client.get("/api/weeks/current", headers=commish_headers).json()
+        assert current["week"]["week_no"] == 1
+        assert current["week"]["status"] == "locked"
+        assert current["board"] is not None
+        live = client.get("/api/admin/live", headers=commish_headers).json()
+        assert live["week"]["week_no"] == 2
+        assert live["week"]["status"] == "draft"
+        assert len(live["games"]) == 5
+        hidden = client.get("/api/weeks/2/board", headers=commish_headers)
+        assert hidden.status_code == 403
 
 
 def _final_feed():

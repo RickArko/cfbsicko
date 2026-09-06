@@ -282,6 +282,8 @@ def list_user_picks(conn: sqlite3.Connection, user_id: int, week_id: int) -> lis
 
 
 def board(conn: sqlite3.Connection, week: dict[str, Any], now: datetime) -> list[dict[str, Any]] | None:
+    if week["status"] == "draft":
+        return None
     if week_is_writable(week, now) and week["status"] == "open":
         return None
     users = conn.execute(
