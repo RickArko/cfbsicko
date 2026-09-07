@@ -69,6 +69,8 @@ const note = ref("");
 const saving = ref(false);
 const now = ref(Date.now());
 let timer;
+let loadSeq = 0;
+let pollInFlight = false;
 
 const days = computed(() => [...new Set(games.value.map((g) => g.day_label))]);
 const visibleGames = computed(() =>
@@ -156,8 +158,10 @@ function toggle(game, market, side) {
 }
 
 async function load({ force = false } = {}) {
+  const seq = ++loadSeq;
   try {
     const data = await api("/api/weeks/current", { token: props.token });
+    if (seq !== loadSeq) return;
     week.value = data.week;
     games.value = data.games;
     locked.value = data.locked;
@@ -172,6 +176,7 @@ async function load({ force = false } = {}) {
       lastSynced.value = incoming.map((p) => ({ ...p }));
     }
   } catch (exc) {
+    if (seq !== loadSeq) return;
     loadError.value = exc.message;
   }
 }
@@ -198,7 +203,11 @@ onMounted(() => {
   load({ force: true });
   timer = setInterval(() => {
     now.value = Date.now();
-    load();
+    if (pollInFlight) return;
+    pollInFlight = true;
+    load().finally(() => {
+      pollInFlight = false;
+    });
   }, 30000);
 });
 onUnmounted(() => clearInterval(timer));

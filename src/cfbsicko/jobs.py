@@ -523,11 +523,16 @@ def _enqueue_line_moved(
             subject=subject,
             body=body,
             week_id=int(week["id"]),
-            dedupe_key=f"{game['id']}:{row['market']}:{market}",
+            dedupe_key=f"{game['id']}:{row['market']}:{_line_dedupe_token(market)}",
             user_id=int(row["user_id"]),
             title=subject,
             href=f"{Config.PUBLIC_APP_URL}/app",
         )
+
+
+def _line_dedupe_token(value: float) -> str:
+    """Stable key so -22 and -22.0 do not enqueue two line-moved mails."""
+    return f"{float(value):.1f}"
 
 
 def _prune_old_ticks(conn: sqlite3.Connection, now: datetime) -> None:

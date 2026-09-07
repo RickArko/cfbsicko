@@ -279,6 +279,44 @@ def test_line_moved_only_holders_pre_lock(imported, clock, commish_headers):
         assert not any("Line moved" in row[1] for row in sent)
 
 
+def test_line_moved_dedupe_normalizes_float_repr(imported, clock, commish_headers):
+    from cfbsicko.jobs import _enqueue_line_moved, _line_dedupe_token
+
+    assert _line_dedupe_token(-22) == _line_dedupe_token(-22.0) == "-22.0"
+    assert _line_dedupe_token(54.5) == "54.5"
+
+    clock["now"] = clock["now"].replace(year=2026, month=9, day=8, hour=12)
+    feed = StaticFeed(list(FEED5))
+    app, _sent = _live_app(imported, clock, feed=feed)
+    with TestClient(app) as client:
+        invite(client, commish_headers, "holder@example.com", "Holder")
+        client.post(
+            "/api/admin/weeks/2/ingest",
+            json={"lock_at": "2026-09-10T18:00:00-04:00"},
+            headers=commish_headers,
+        )
+        games = client.post("/api/admin/weeks/2/freeze", headers=commish_headers).json()["games"]
+        holder = auth_header("holder-sub", "holder@example.com")
+        assert (
+            client.put("/api/weeks/2/picks", json={"picks": _five(games)}, headers=holder).status_code == 200
+        )
+        week = client.get("/api/weeks/2", headers=holder).json()["week"]
+        game = next(row for row in games if row["away"] == "Houston")
+        conn = app.state.conn
+        _enqueue_line_moved(
+            conn, week, game, FeedGame("Houston", "Oklahoma", -22, 54.5, "hou-okl", day_label="Thursday")
+        )
+        _enqueue_line_moved(
+            conn, week, game, FeedGame("Houston", "Oklahoma", -22.0, 54.5, "hou-okl", day_label="Thursday")
+        )
+        conn.commit()
+        rows = conn.execute(
+            "SELECT dedupe_key FROM mail_outbox WHERE kind = 'line_moved' ORDER BY id"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["dedupe_key"] == f"{game['id']}:spread:-22.0"
+
+
 def test_ingest_refuses_week_with_picks(imported, clock, commish_headers):
     app, _ = _live_app(imported, clock)
     with TestClient(app) as client:

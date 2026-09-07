@@ -59,6 +59,8 @@ const denied = ref("");
 const hashNote = ref("");
 const unread = ref(0);
 let notifyTimer;
+let unreadInFlight = false;
+let pollAlive = false;
 
 async function refresh() {
   denied.value = "";
@@ -148,6 +150,21 @@ function pollMs() {
   return 300000;
 }
 
+function scheduleUnread() {
+  notifyTimer = setTimeout(async () => {
+    if (!pollAlive) return;
+    if (!unreadInFlight) {
+      unreadInFlight = true;
+      try {
+        await loadUnread();
+      } finally {
+        unreadInFlight = false;
+      }
+    }
+    if (pollAlive) scheduleUnread();
+  }, pollMs());
+}
+
 onMounted(async () => {
   const fromHash = hashAuthError();
   if (fromHash) {
@@ -155,7 +172,11 @@ onMounted(async () => {
     history.replaceState(null, "", window.location.pathname);
   }
   await refresh();
-  notifyTimer = setInterval(loadUnread, pollMs());
+  pollAlive = true;
+  scheduleUnread();
 });
-onUnmounted(() => clearInterval(notifyTimer));
+onUnmounted(() => {
+  pollAlive = false;
+  clearTimeout(notifyTimer);
+});
 </script>
