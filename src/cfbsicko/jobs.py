@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cfbsicko.config import Config
@@ -42,6 +42,16 @@ def _as_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=EASTERN)
     return value
+
+
+def _utc_sql_ts(value: datetime) -> str:
+    """Normalize an aware timestamp to a UTC SQLite datetime() string.
+
+    Stored timestamps mix offsets (UTC in prod, -04:00/-05:00 defaults and
+    test clocks), so DB-side compares must go through datetime() on both
+    sides; a raw ISO string compare mis-orders across offsets.
+    """
+    return _as_aware(value).astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_when(value: str) -> datetime:
@@ -251,12 +261,12 @@ def _pick_counts(conn: sqlite3.Connection, week_id: int, league_id: int) -> list
 
 
 def _unlock_stale(conn: sqlite3.Connection, now: datetime) -> None:
-    cutoff = (now - LOCK_STALE).isoformat()
+    cutoff = _utc_sql_ts(now - LOCK_STALE)
     conn.execute(
         """
         UPDATE scheduled_jobs
         SET locked_at = NULL
-        WHERE status = 'pending' AND locked_at IS NOT NULL AND locked_at < ?
+        WHERE status = 'pending' AND locked_at IS NOT NULL AND datetime(locked_at) < datetime(?)
         """,
         (cutoff,),
     )
@@ -264,7 +274,7 @@ def _unlock_stale(conn: sqlite3.Connection, now: datetime) -> None:
         """
         UPDATE mail_outbox
         SET locked_at = NULL
-        WHERE sent_at IS NULL AND locked_at IS NOT NULL AND locked_at < ?
+        WHERE sent_at IS NULL AND locked_at IS NOT NULL AND datetime(locked_at) < datetime(?)
         """,
         (cutoff,),
     )
@@ -336,11 +346,11 @@ def tick_outbox(conn: sqlite3.Connection, now: datetime, send: SendFn) -> int:
         """
         SELECT * FROM mail_outbox
         WHERE sent_at IS NULL AND locked_at IS NULL AND attempts < ?
-          AND send_after <= ?
-        ORDER BY send_after, id
+          AND datetime(send_after) <= datetime(?)
+        ORDER BY datetime(send_after), id
         LIMIT ?
         """,
-        (OUTBOX_MAX_ATTEMPTS, now.isoformat(), OUTBOX_BATCH),
+        (OUTBOX_MAX_ATTEMPTS, _utc_sql_ts(now), OUTBOX_BATCH),
     ).fetchall()
     sent = 0
     for row in rows:

@@ -35,6 +35,7 @@ make fmt         # ruff --fix + format
 - `lineup_saved` mail/notification fires only when the saved picks actually change — a no-op re-save writes a `pick_revisions` row but stays silent. Its outbox `dedupe_key` is `lineup:<revision_id>`.
 - `schedule_lock_jobs`/`_upsert_job` re-arm a `done`/`error` job to `pending` when `lock_at` is rescheduled, so a postponed lock re-schedules the 1-hour warning.
 - Draft weeks report `locked: false` and no board; ticks feed `season=` through to `feed.odds()/scores()` (never `Config.SEASON` inside the feed).
+- `mail_outbox.send_after`/`locked_at` and `scheduled_jobs.locked_at` mix UTC and local-offset ISO strings (epoch `-05:00` default, retries `+00:00`, test clock `-04:00`). Any DB-side time filter/order must normalize with SQLite `datetime(col) <= datetime(?)` — never a raw string compare, which mis-orders across offsets.
 
 ## Testing gotchas
 

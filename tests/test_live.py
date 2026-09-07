@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from conftest import auth_header, invite
 from fastapi.testclient import TestClient
@@ -1381,3 +1381,75 @@ def test_draft_week_reports_locked_false(imported, clock, commish_headers):
         week = client.get("/api/weeks/2", headers=commish_headers).json()
         assert week["week"]["status"] == "draft"
         assert week["locked"] is False
+
+
+def test_tick_outbox_due_filter_normalizes_timezone_offsets(imported, clock):
+    import json
+
+    from cfbsicko.db import connect
+    from cfbsicko.jobs import tick_outbox
+
+    conn = connect(imported)
+    week_id = int(conn.execute("SELECT id FROM weeks ORDER BY id LIMIT 1").fetchone()[0])
+    payload = json.dumps({"subject": "s", "body": "b"})
+    due_earlier = "2026-09-03T19:00:00+00:00"
+    due_offset = "2026-09-03T22:00:00+02:00"
+    future = "2026-09-03T18:00:00-05:00"
+    for key, when in (
+        ("due-earlier", due_earlier),
+        ("due-offset", due_offset),
+        ("future", future),
+    ):
+        conn.execute(
+            "INSERT INTO mail_outbox (kind, week_id, to_email, payload_json, dedupe_key, send_after)"
+            " VALUES ('tick', ?, 'a@example.com', ?, ?, ?)",
+            (week_id, payload, key, when),
+        )
+    conn.commit()
+
+    def send(to, subject, body, html=None):
+        return "smtp"
+
+    now = datetime(2026, 9, 3, 20, 0, 0, tzinfo=UTC)
+    assert tick_outbox(conn, now, send) == 2
+    sent_at = {
+        row["dedupe_key"]: row["sent_at"]
+        for row in conn.execute("SELECT dedupe_key, sent_at FROM mail_outbox").fetchall()
+    }
+    conn.close()
+    assert sent_at["due-earlier"] is not None
+    assert sent_at["due-offset"] is not None
+    assert sent_at["future"] is None
+
+
+def test_unlock_stale_normalizes_timezone_offsets(imported, clock):
+    import json
+
+    from cfbsicko.db import connect
+    from cfbsicko.jobs import tick_outbox
+
+    conn = connect(imported)
+    week_id = int(conn.execute("SELECT id FROM weeks ORDER BY id LIMIT 1").fetchone()[0])
+    payload = json.dumps({"subject": "s", "body": "b"})
+    stale_offset = "2026-09-03T23:30:00+02:00"
+    fresh = "2026-09-03T22:05:00+00:00"
+    for key, locked in (("stale", stale_offset), ("fresh", fresh)):
+        conn.execute(
+            "INSERT INTO mail_outbox (kind, week_id, to_email, payload_json, dedupe_key, send_after, locked_at)"
+            " VALUES ('held', ?, ?, ?, ?, '2026-09-03T19:00:00+00:00', ?)",
+            (week_id, key, payload, key, locked),
+        )
+    conn.commit()
+
+    def send(to, subject, body, html=None):
+        return "smtp"
+
+    now = datetime(2026, 9, 3, 22, 5, 0, tzinfo=UTC)
+    tick_outbox(conn, now, send)
+    locked = {
+        row["dedupe_key"]: row["locked_at"]
+        for row in conn.execute("SELECT dedupe_key, locked_at FROM mail_outbox").fetchall()
+    }
+    conn.close()
+    assert locked["stale"] is None
+    assert locked["fresh"] == fresh
