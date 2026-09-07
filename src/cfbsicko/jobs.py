@@ -62,8 +62,11 @@ def _upsert_job(conn: sqlite3.Connection, week_id: int, kind: str, run_at: datet
         INSERT INTO scheduled_jobs (week_id, kind, run_at, status)
         VALUES (?, ?, ?, 'pending')
         ON CONFLICT(week_id, kind) DO UPDATE SET
-            run_at = excluded.run_at
-        WHERE scheduled_jobs.status = 'pending'
+            run_at = excluded.run_at,
+            status = 'pending',
+            attempts = 0,
+            locked_at = NULL,
+            last_error = NULL
         """,
         (week_id, kind, iso),
     )
@@ -436,7 +439,7 @@ def tick_odds(
     liveable = [g for g in games if int(g["id"]) not in finals]
     if not liveable:
         return 0
-    ticks = feed.odds([str(g["provider_game_id"]) for g in liveable])
+    ticks = feed.odds([str(g["provider_game_id"]) for g in liveable], season=week["season"])
     by_id = {item.provider_game_id: item for item in ticks}
     moved = 0
     for game in liveable:
@@ -574,7 +577,7 @@ def _tick_scores_week(
         return 0
     if not games:
         return 0
-    updates = feed.scores([str(g["provider_game_id"]) for g in games])
+    updates = feed.scores([str(g["provider_game_id"]) for g in games], season=week["season"])
     by_id = {item.provider_game_id: item for item in updates}
     changed = 0
     for game in games:
@@ -838,6 +841,7 @@ def enqueue_lineup_saved(
     week: dict[str, Any],
     before: list[dict[str, Any]],
     after: list[dict[str, Any]],
+    revision_id: int,
 ) -> None:
     email = (user.get("email") or "").strip()
     if not email:
@@ -855,7 +859,7 @@ def enqueue_lineup_saved(
         subject=subject,
         body=body,
         week_id=int(week["id"]),
-        dedupe_key=datetime.now(EASTERN).isoformat(),
+        dedupe_key=f"lineup:{revision_id}",
         user_id=int(user["id"]),
         title=subject,
         href=f"{Config.PUBLIC_APP_URL}/app",

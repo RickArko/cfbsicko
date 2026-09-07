@@ -1291,3 +1291,93 @@ def test_force_replace_clears_jobs_snapshots_revisions_outbox(imported, clock, c
             "mail_outbox": 0,
         }
         assert conn.execute("SELECT COUNT(*) FROM line_ticks").fetchone()[0] == 0
+
+
+def test_resave_identical_picks_does_not_mail(imported, clock, commish_headers):
+    clock["now"] = clock["now"].replace(year=2026, month=9, day=10, hour=12)
+    app, sent = _live_app(imported, clock)
+    with TestClient(app) as client:
+        invite(client, commish_headers, "same@example.com", "Same")
+        pub = client.post(
+            "/api/admin/weeks",
+            json={"week_no": 2, "lock_at": "2026-09-10T18:00:00-04:00", "slate_text": SLATE5},
+            headers=commish_headers,
+        )
+        assert pub.status_code == 200, pub.text
+        games = pub.json()["games"]
+        headers = auth_header("same-sub", "same@example.com")
+        first = client.put("/api/weeks/2/picks", json={"picks": _five(games)}, headers=headers)
+        assert first.status_code == 200, first.text
+        sent.clear()
+        again = client.put("/api/weeks/2/picks", json={"picks": _five(games)}, headers=headers)
+        assert again.status_code == 200, again.text
+        tick_outbox(app.state.conn, clock["now"], app.state.mail_send)
+        assert not any("lineup updated" in row[1] for row in sent)
+        notes = client.get("/api/me/notifications", headers=headers).json()
+        assert notes["unread"] == 0
+        five = _five(games)
+        five[0]["side"] = "home"
+        changed = client.put("/api/weeks/2/picks", json={"picks": five}, headers=headers)
+        assert changed.status_code == 200, changed.text
+        tick_outbox(app.state.conn, clock["now"], app.state.mail_send)
+        mails = [row for row in sent if "lineup updated" in row[1]]
+        assert len(mails) == 1
+        notes = client.get("/api/me/notifications", headers=headers).json()
+        assert notes["unread"] == 1
+
+
+def test_upsert_job_rearms_done_lock_job(imported, clock):
+    from cfbsicko.db import connect
+    from cfbsicko.jobs import _upsert_job
+
+    conn = connect(imported)
+    week_id = int(conn.execute("SELECT id FROM weeks ORDER BY id LIMIT 1").fetchone()[0])
+    conn.execute("DELETE FROM scheduled_jobs WHERE week_id = ?", (week_id,))
+    conn.commit()
+    _upsert_job(conn, week_id, "lock_warning_1h", clock["now"] - timedelta(minutes=1))
+    conn.execute(
+        "UPDATE scheduled_jobs SET status = 'done', locked_at = ? WHERE week_id = ? AND kind = 'lock_warning_1h'",
+        (clock["now"].isoformat(), week_id),
+    )
+    conn.commit()
+    later = clock["now"] + timedelta(hours=2)
+    _upsert_job(conn, week_id, "lock_warning_1h", later)
+    row = conn.execute(
+        "SELECT status, run_at, attempts, locked_at FROM scheduled_jobs WHERE week_id = ? AND kind = 'lock_warning_1h'",
+        (week_id,),
+    ).fetchone()
+    conn.close()
+    assert row["status"] == "pending"
+    assert row["locked_at"] is None
+    assert row["attempts"] == 0
+    assert row["run_at"] == later.isoformat()
+
+
+def test_cfbd_odds_scores_use_week_season():
+    from cfbsicko.feed import CfbdFeed
+
+    seen: dict[str, object] = {}
+
+    def get_json(path, params):
+        seen["year"] = params.get("year")
+        return []
+
+    feed = CfbdFeed("k", get_json=get_json)
+    feed.odds(["1"], season=2027)
+    assert seen["year"] == "2027"
+    feed.scores(["1"], season=2028)
+    assert seen["year"] == "2028"
+
+
+def test_draft_week_reports_locked_false(imported, clock, commish_headers):
+    app, _ = _live_app(imported, clock)
+    with TestClient(app) as client:
+        ing = client.post(
+            "/api/admin/weeks/2/ingest",
+            json={"lock_at": "2026-09-10T18:00:00-04:00"},
+            headers=commish_headers,
+        )
+        assert ing.status_code == 200, ing.text
+        week = client.get("/api/weeks/2", headers=commish_headers).json()
+        assert week["week"]["status"] == "draft"
+        assert week["locked"] is False

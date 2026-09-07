@@ -28,6 +28,14 @@ make fmt         # ruff --fix + format
 - Frontend dev: `cd frontend && npm run dev` — Vite on :5173, proxies `/api` to `127.0.0.1:8000`. In prod (Docker/Fly) the API serves the built `frontend/dist` via `CFBSICKO_FRONTEND_DIST`; `dist/` is gitignored.
 - CLI subcommands: `serve` (default), `migrate`, `import-sheet`, `extract-sheet` (laptop only — xlsx never leaves the laptop), `seed-csv`, `replay-week1`, `publish-week2`, `mail-probe`, `invite-group`.
 
+## Live scoring / ticks
+
+- `/api/internal/tick` runs the score/odds/mail jobs and is gated on an `X-Cron-Token` header matching `CRON_TOKEN`; empty `CRON_TOKEN` makes the route 404.
+- With no `CFBD_API_KEY` the ticks no-op unless a `ScoreOddsFeed` is injected — `create_app(feed=...)` / `app.state.feed`. Tests inject `StaticFeed` and `X-Cron-Token: tick` (`tests/test_live.py`).
+- `lineup_saved` mail/notification fires only when the saved picks actually change — a no-op re-save writes a `pick_revisions` row but stays silent. Its outbox `dedupe_key` is `lineup:<revision_id>`.
+- `schedule_lock_jobs`/`_upsert_job` re-arm a `done`/`error` job to `pending` when `lock_at` is rescheduled, so a postponed lock re-schedules the 1-hour warning.
+- Draft weeks report `locked: false` and no board; ticks feed `season=` through to `feed.odds()/scores()` (never `Config.SEASON` inside the feed).
+
 ## Testing gotchas
 
 - Tests hard-require `data/assets/CFB Locks MASTER SHEET 2026.xlsx`, but `data/` is gitignored. A fresh clone fails until that xlsx is restored locally — this is expected, not a code bug.
