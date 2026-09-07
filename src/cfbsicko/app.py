@@ -422,7 +422,7 @@ def create_app(
             "week": week,
             "games": list_games(db(), week["id"]),
             "my_picks": list_user_picks(db(), user["id"], week["id"]),
-            "locked": not writable,
+            "locked": not writable and week["status"] != "draft",
             "board": None if writable else board(db(), week, now()),
         }
         return payload

@@ -45,9 +45,9 @@ class FeedGame:
 class ScoreOddsFeed(Protocol):
     def slate(self, season: int, week_no: int) -> list[FeedGame]: ...
 
-    def odds(self, provider_ids: list[str]) -> list[FeedGame]: ...
+    def odds(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]: ...
 
-    def scores(self, provider_ids: list[str]) -> list[FeedGame]: ...
+    def scores(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]: ...
 
 
 class EmptyFeed:
@@ -56,10 +56,10 @@ class EmptyFeed:
     def slate(self, season: int, week_no: int) -> list[FeedGame]:
         return []
 
-    def odds(self, provider_ids: list[str]) -> list[FeedGame]:
+    def odds(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]:
         return []
 
-    def scores(self, provider_ids: list[str]) -> list[FeedGame]:
+    def scores(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]:
         return []
 
 
@@ -72,11 +72,11 @@ class StaticFeed:
     def slate(self, season: int, week_no: int) -> list[FeedGame]:
         return list(self.games)
 
-    def odds(self, provider_ids: list[str]) -> list[FeedGame]:
+    def odds(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]:
         wanted = set(provider_ids)
         return [game for game in self.games if game.provider_game_id in wanted]
 
-    def scores(self, provider_ids: list[str]) -> list[FeedGame]:
+    def scores(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]:
         return self.odds(provider_ids)
 
 
@@ -112,10 +112,10 @@ class EspnScoreboardFeed:
         out.sort(key=lambda game: (game.kickoff or "", game.away, game.home))
         return out
 
-    def odds(self, provider_ids: list[str]) -> list[FeedGame]:
+    def odds(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]:
         return []
 
-    def scores(self, provider_ids: list[str]) -> list[FeedGame]:
+    def scores(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]:
         return []
 
     def _http_day(self, yyyymmdd: str) -> dict[str, Any]:
@@ -156,20 +156,21 @@ class CfbdFeed:
         rows = self._get_json("/lines", {"year": str(season), "week": str(week_no), "seasonType": "regular"})
         return [game for row in rows if (game := self._from_line(row)) is not None]
 
-    def odds(self, provider_ids: list[str]) -> list[FeedGame]:
+    def odds(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]:
         wanted = set(provider_ids)
-        rows = self._get_json("/lines", {"year": str(Config.SEASON), "seasonType": "regular"})
+        rows = self._get_json("/lines", {"year": str(season or Config.SEASON), "seasonType": "regular"})
         return [
             game
             for row in rows
             if (game := self._from_line(row)) is not None and game.provider_game_id in wanted
         ]
 
-    def scores(self, provider_ids: list[str]) -> list[FeedGame]:
+    def scores(self, provider_ids: list[str], *, season: int | None = None) -> list[FeedGame]:
         wanted = set(provider_ids)
-        rows = self._get_json("/scoreboard", {"year": str(Config.SEASON), "seasonType": "regular"})
+        season = season or Config.SEASON
+        rows = self._get_json("/scoreboard", {"year": str(season), "seasonType": "regular"})
         if not rows:
-            rows = self._get_json("/games", {"year": str(Config.SEASON), "seasonType": "regular"})
+            rows = self._get_json("/games", {"year": str(season), "seasonType": "regular"})
         out: list[FeedGame] = []
         for row in rows:
             game = self._from_score(row)

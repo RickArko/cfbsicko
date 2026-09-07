@@ -248,11 +248,11 @@ def save_picks(
             (user_id, week["id"], pick.slot, pick.game_id, pick.market, pick.side),
         )
     saved = list_user_picks(conn, user_id, week["id"])
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO pick_revisions (user_id, week_id, payload_json) VALUES (?, ?, ?)",
         (user_id, week["id"], json.dumps(saved, default=str)),
     )
-    if prior:
+    if prior and not _same_picks(prior, saved):
         user = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         from cfbsicko.jobs import enqueue_lineup_saved
 
@@ -262,9 +262,17 @@ def save_picks(
             week=week,
             before=prior,
             after=saved,
+            revision_id=int(cur.lastrowid),
         )
     conn.commit()
     return saved
+
+
+def _same_picks(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> bool:
+    if len(a) != len(b):
+        return False
+    keys = {(pick["game_id"], pick["market"], pick["side"]) for pick in a}
+    return all((pick["game_id"], pick["market"], pick["side"]) in keys for pick in b)
 
 
 def list_user_picks(conn: sqlite3.Connection, user_id: int, week_id: int) -> list[dict[str, Any]]:
