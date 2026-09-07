@@ -271,8 +271,8 @@ def save_picks(
 def _same_picks(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> bool:
     if len(a) != len(b):
         return False
-    keys = {(pick["game_id"], pick["market"], pick["side"]) for pick in a}
-    return all((pick["game_id"], pick["market"], pick["side"]) in keys for pick in b)
+    keys = {(pick["game_id"], pick["market"], pick["side"], pick["slot"]) for pick in a}
+    return all((pick["game_id"], pick["market"], pick["side"], pick["slot"]) in keys for pick in b)
 
 
 def list_user_picks(conn: sqlite3.Connection, user_id: int, week_id: int) -> list[dict[str, Any]]:

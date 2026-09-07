@@ -1381,3 +1381,30 @@ def test_draft_week_reports_locked_false(imported, clock, commish_headers):
         week = client.get("/api/weeks/2", headers=commish_headers).json()
         assert week["week"]["status"] == "draft"
         assert week["locked"] is False
+
+
+def test_reorder_slots_mails_lineup_saved(imported, clock, commish_headers):
+    clock["now"] = clock["now"].replace(year=2026, month=9, day=10, hour=12)
+    app, sent = _live_app(imported, clock)
+    with TestClient(app) as client:
+        invite(client, commish_headers, "reorder@example.com", "Reorder")
+        pub = client.post(
+            "/api/admin/weeks",
+            json={"week_no": 2, "lock_at": "2026-09-10T18:00:00-04:00", "slate_text": SLATE5},
+            headers=commish_headers,
+        )
+        assert pub.status_code == 200, pub.text
+        games = pub.json()["games"]
+        headers = auth_header("reorder-sub", "reorder@example.com")
+        first = client.put("/api/weeks/2/picks", json={"picks": _five(games)}, headers=headers)
+        assert first.status_code == 200, first.text
+        sent.clear()
+        reordered = _five(games)
+        reordered[0]["slot"], reordered[1]["slot"] = reordered[1]["slot"], reordered[0]["slot"]
+        second = client.put("/api/weeks/2/picks", json={"picks": reordered}, headers=headers)
+        assert second.status_code == 200, second.text
+        tick_outbox(app.state.conn, clock["now"], app.state.mail_send)
+        mails = [row for row in sent if "lineup updated" in row[1]]
+        assert len(mails) == 1
+        notes = client.get("/api/me/notifications", headers=headers).json()
+        assert notes["unread"] == 1
