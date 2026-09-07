@@ -64,6 +64,8 @@ class Config:
         "yes",
         "on",
     }
+    CRON_TOKEN: str = os.getenv("CRON_TOKEN") or ""
+    CFBD_API_KEY: str = os.getenv("CFBD_API_KEY") or ""
 
     @classmethod
     def database_path(cls) -> Path:
@@ -144,3 +146,5 @@ def reload_config() -> None:
         "yes",
         "on",
     }
+    Config.CRON_TOKEN = os.getenv("CRON_TOKEN") or ""
+    Config.CFBD_API_KEY = os.getenv("CFBD_API_KEY") or ""
