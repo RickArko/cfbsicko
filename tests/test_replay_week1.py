@@ -17,6 +17,10 @@ WEEK1 = Path(__file__).resolve().parents[1] / "seeds" / "2026" / "week-01"
 WEEK2 = Path(__file__).resolve().parents[1] / "seeds" / "2026" / "week-02"
 
 
+def test_week2_rehearsal_has_no_wide_card():
+    assert not (WEEK2 / "picks_wide.csv").exists()
+
+
 def test_refuse_fly_and_warehouse_paths(tmp_path):
     with pytest.raises(ReplayPathError, match="Fly"):
         assert_local_replay_path(Path("/data/locks.db"))

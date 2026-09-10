@@ -9,7 +9,7 @@ FLY_PUBLIC_APP_URL ?= https://cfbsicko.com
 FLY_PUBLIC_URL ?= https://cfbsicko.fly.dev
 SEASON ?= 2026
 
-.PHONY: bootstrap run test lint fmt supabase.check \
+.PHONY: bootstrap run test lint fmt supabase.check supabase.auth-smtp \
 	invite-review invite-blast \
 	fly.app fly.volume fly.secrets fly.test-login fly.test-login-off \
 	fly.deploy fly.status fly.logs fly.certs \
@@ -66,6 +66,14 @@ fly.seed-csv:
 
 supabase.check:
 	$(UV) run python scripts/check_supabase.py
+	@if grep -Eq '^SUPABASE_ACCESS_TOKEN=.+' .env 2>/dev/null || [ -n "$${SUPABASE_ACCESS_TOKEN:-}" ]; then \
+		$(UV) run python scripts/check_auth_smtp.py; \
+	else \
+		printf 'skip auth smtp check (set SUPABASE_ACCESS_TOKEN, then make supabase.auth-smtp)\n'; \
+	fi
+
+supabase.auth-smtp:
+	$(UV) run python scripts/check_auth_smtp.py $(if $(filter 1,$(ENFORCE)),--enforce,)
 
 fly.app:
 	$(FLY) apps create $(FLY_APP)

@@ -123,7 +123,10 @@ If invite mail opens `127.0.0.1`, Site URL is still local. Do not "fix" it in co
 
 ## 7. Auth SMTP (launch blocker)
 
-Built-in Supabase mail is 2/hour. Point Auth SMTP at the same Resend account. See [transactional-email.md](transactional-email.md).
+Built-in Supabase mail is 2/hour. Point Auth SMTP at the same Resend account, then
+raise **Authentication → Rate Limits** to 300 (SMTP enable only sets 30; SMTP off
+resets to 2). Put a personal access token in `.env` as `SUPABASE_ACCESS_TOKEN` and
+run `make supabase.auth-smtp` (or `ENFORCE=1` to PATCH). See [transactional-email.md](transactional-email.md).
 
 ## 8. Seed prod
 

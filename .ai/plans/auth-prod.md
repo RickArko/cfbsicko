@@ -81,6 +81,9 @@ Same as [docs/deployment/transactional-email.md](../../docs/deployment/transacti
 1. Verify `cfbsicko.com` in Resend (`send.` subdomain records — do not replace Fly A/AAAA).
 2. Supabase → Authentication → SMTP: host `smtp.resend.com`, port `465`, user `resend`, password = Resend API key, from `locks@cfbsicko.com`.
 3. Raise Auth emails/hour off `2` (300 is fine for twelve people).
+   That lives on **Authentication → Rate Limits**, not the SMTP form. Enabling
+   custom SMTP only sets **30**; disabling SMTP resets to **2**. Persist with
+   `make supabase.auth-smtp` / `ENFORCE=1` after `SUPABASE_ACCESS_TOKEN` is in `.env`.
 4. Product SMTP on Fly (`SMTP_*`) is a different path (slate / reminder / standings). Both should use Resend.
 
 Until this lands, “Send code” will 429 after two messages.
@@ -89,14 +92,14 @@ Until this lands, “Send code” will 429 after two messages.
 
 ## Phase 4 — Proton-safe email template
 
-Supabase → Authentication → Email Templates → Magic Link (and Invite if you use it).
+Supabase → Authentication → Email Templates → Magic Link, Confirm signup, Invite, Reset.
 Paste [`docs/deployment/supabase-magic-link.html`](../../docs/deployment/supabase-magic-link.html).
+Subject: `Your CFB Sicko code`. **Do not include `{{ .ConfirmationURL }}`.** Proton
+prefetches that URL and burns the six digits (`otp_expired`).
 
-- Put the **6-digit `{{ .Token }}`** at the top in large type.
-- First sentence: “Type this on cfbsicko.com. Do not tap the button if you use ProtonMail.”
-- Keep `{{ .ConfirmationURL }}` below for Gmail/Apple users. Proton prefetches the link and burns it (`otp_expired`).
+Or, with `SUPABASE_ACCESS_TOKEN` in `.env`: `make supabase.auth-smtp ENFORCE=1`.
 
-The Vue client already calls `signInWithOtp` + `verifyOtp({ type: "email" })`. No app change required once mail arrives.
+The Vue client already calls `signInWithOtp` + `verifyOtp({ type: "email" })`. Type the digits.
 
 Optional later: drop implicit hash flow for PKCE (`flowType: "pkce"`). Not blocking.
 
