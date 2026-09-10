@@ -72,7 +72,7 @@ export function hashAuthError() {
   const code = params.get("error_code") || params.get("error");
   if (!code) return "";
   if (code === "otp_expired") {
-    return "That email link was already used or scanned (ProtonMail does this). Type the 6-digit code, or use the temporary password if it is shown.";
+    return "That email link was already used or scanned (ProtonMail does this). Type the 6-digit code from a fresh Send code. There is no working link.";
   }
   return params.get("error_description")?.replace(/\+/g, " ") || code;
 }

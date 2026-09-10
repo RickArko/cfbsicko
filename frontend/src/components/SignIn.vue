@@ -11,7 +11,7 @@
       <button type="submit" :disabled="busy">Sign in</button>
     </form>
     <p class="muted">
-      We email a 6-digit code. Type it here. If you use ProtonMail, do not tap the link.
+      We email a 6-digit code. Type it here. ProtonMail users: there is no working link.
     </p>
     <form v-if="!sent" class="row" @submit.prevent="send">
       <input v-if="!localLogin" v-model="email" type="email" required placeholder="you@school.edu" />
@@ -68,7 +68,7 @@ async function send() {
   try {
     await signIn(email.value);
     sent.value = true;
-    note.value = "Code sent. Use the 6 digits in the email, not the button.";
+    note.value = "Code sent. Type the 6 digits. Ignore any old sign-in link.";
   } catch (exc) {
     note.value = exc.message || String(exc);
   } finally {

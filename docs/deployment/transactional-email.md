@@ -52,22 +52,21 @@ From host must be `cfbsicko.com`. Delivery `smtp`.
    ```
 
    `make supabase.check` runs the same read after the project health probe.
-4. Proton-safe Magic Link template. Supabase → Authentication → Email Templates → Magic Link.
-   Subject: `Your CFB Sicko code`. Paste the HTML from
+4. Proton-safe Auth templates. Subject: `Your CFB Sicko code`. Body from
    [`supabase-magic-link.html`](supabase-magic-link.html).
-   The 6-digit `{{ .Token }}` is first and large. Copy for the body if you
-   edit in the visual editor:
+   **Code only — do not include `{{ .ConfirmationURL }}`.** ProtonMail
+   prefetches that URL and burns the six digits (`otp_expired`) before you
+   open the message. Apply the same HTML to Magic Link, Confirm signup,
+   Invite, and Reset password.
 
    ```text
    Your code: {{ .Token }}
 
-   Type this on cfbsicko.com. Do not tap the button if you use ProtonMail.
+   Type these six digits on cfbsicko.com. There is no sign-in button in this email.
    ```
 
-   Leave `{{ .ConfirmationURL }}` below for Gmail. ProtonMail prefetches the
-   confirm link and burns it (`otp_expired`). The app already wants the six
-   digits typed in. Repeat the same top-of-mail code block on Invite if you
-   use that template.
+   `make supabase.auth-smtp ENFORCE=1` pushes those templates when
+   `SUPABASE_ACCESS_TOKEN` is set. The app already wants the digits typed in.
 5. One password-reset / magic-link probe. Link host must be `https://cfbsicko.com`.
 
 Until this is done, use `make fly.test-login` (see [auth-prod.md](../../.ai/plans/auth-prod.md)).

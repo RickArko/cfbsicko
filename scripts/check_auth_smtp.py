@@ -25,6 +25,19 @@ MANAGEMENT = "https://api.supabase.com/v1/projects"
 TARGET_EMAILS_PER_HOUR = 300
 EXPECTED_SMTP_HOST = "smtp.resend.com"
 EXPECTED_FROM_HOST = "cfbsicko.com"
+MAGIC_LINK_SUBJECT = "Your CFB Sicko code"
+TEMPLATE_FIELDS = (
+    "mailer_templates_magic_link_content",
+    "mailer_templates_confirmation_content",
+    "mailer_templates_invite_content",
+    "mailer_templates_recovery_content",
+)
+SUBJECT_FIELDS = (
+    "mailer_subjects_magic_link",
+    "mailer_subjects_confirmation",
+    "mailer_subjects_invite",
+    "mailer_subjects_recovery",
+)
 
 
 def project_ref(supabase_url: str) -> str:
@@ -58,13 +71,54 @@ def fetch_auth_config(ref: str, token: str) -> dict[str, Any]:
 
 
 def patch_email_rate(ref: str, token: str, emails_per_hour: int) -> dict[str, Any]:
+    return patch_auth_config(ref, token, {"rate_limit_email_sent": emails_per_hour})
+
+
+def magic_link_html() -> str:
+    raw = (ROOT / "docs" / "deployment" / "supabase-magic-link.html").read_text(encoding="utf-8")
+    body = raw
+    if body.lstrip().startswith("<!--"):
+        end = body.find("-->")
+        if end != -1:
+            body = body[end + 3 :]
+    html = body.strip()
+    if "{{ .Token }}" not in html:
+        raise RuntimeError("supabase-magic-link.html is missing {{ .Token }}")
+    if "{{ .ConfirmationURL }}" in html:
+        raise RuntimeError("supabase-magic-link.html must not include {{ .ConfirmationURL }}")
+    return html
+
+
+def template_payload() -> dict[str, str]:
+    html = magic_link_html()
+    payload = {field: html for field in TEMPLATE_FIELDS}
+    payload.update({field: MAGIC_LINK_SUBJECT for field in SUBJECT_FIELDS})
+    return payload
+
+
+def template_problems(config: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for field in SUBJECT_FIELDS:
+        subject = str(config.get(field) or "").strip()
+        if subject != MAGIC_LINK_SUBJECT:
+            issues.append(f"{field}={subject or 'default'!r} (want {MAGIC_LINK_SUBJECT!r})")
+    for field in TEMPLATE_FIELDS:
+        html = str(config.get(field) or "")
+        if "{{ .Token }}" not in html:
+            issues.append(f"{field} is missing {{{{ .Token }}}} (still the click-the-link mail)")
+        if "{{ .ConfirmationURL }}" in html:
+            issues.append(f"{field} still has {{{{ .ConfirmationURL }}}} (Proton burns it)")
+    return issues
+
+
+def patch_auth_config(ref: str, token: str, body: dict[str, Any]) -> dict[str, Any]:
     response = requests.patch(
         auth_config_url(ref),
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         },
-        json={"rate_limit_email_sent": emails_per_hour},
+        json=body,
         timeout=15,
     )
     if response.status_code >= 400:
@@ -121,7 +175,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--enforce",
         action="store_true",
-        help=f"PATCH rate_limit_email_sent to {TARGET_EMAILS_PER_HOUR} when custom SMTP is on",
+        help=(
+            f"PATCH rate_limit_email_sent to {TARGET_EMAILS_PER_HOUR} and "
+            "push the Proton-safe code-only Auth templates"
+        ),
     )
     parser.add_argument(
         "--min",
@@ -154,38 +211,45 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = summarize(config)
     report(summary)
-    issues = problems(summary, want=args.min)
+    issues = problems(summary, want=args.min) + template_problems(config)
 
-    if args.enforce and summary["rate_limit_email_sent"] < args.min:
-        if not summary["custom_smtp"]:
-            print(
-                "refusing --enforce: enable custom SMTP (Resend) first or the cap resets to 2",
-                file=sys.stderr,
-            )
-            return 2
-        try:
-            config = patch_email_rate(ref, token, args.min)
-        except (RuntimeError, requests.RequestException) as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        summary = summarize(config)
+    if args.enforce:
+        body: dict[str, Any] = {}
         if summary["rate_limit_email_sent"] < args.min:
-            # Some responses omit the field; re-fetch.
+            if not summary["custom_smtp"]:
+                print(
+                    "refusing --enforce: enable custom SMTP (Resend) first or the cap resets to 2",
+                    file=sys.stderr,
+                )
+                return 2
+            body["rate_limit_email_sent"] = args.min
+        if template_problems(config):
+            body.update(template_payload())
+        if body:
             try:
-                summary = summarize(fetch_auth_config(ref, token))
+                config = patch_auth_config(ref, token, body)
             except (RuntimeError, requests.RequestException) as exc:
                 print(str(exc), file=sys.stderr)
                 return 1
-        print(f"enforced emails_per_hour={summary['rate_limit_email_sent']}")
-        report(summary)
-        issues = problems(summary, want=args.min)
+            try:
+                config = fetch_auth_config(ref, token)
+            except (RuntimeError, requests.RequestException) as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            summary = summarize(config)
+            if "rate_limit_email_sent" in body:
+                print(f"enforced emails_per_hour={summary['rate_limit_email_sent']}")
+            if any(key in body for key in TEMPLATE_FIELDS):
+                print("enforced Proton-safe Auth templates (code only, no confirm link)")
+            report(summary)
+            issues = problems(summary, want=args.min) + template_problems(config)
 
     if issues:
         for item in issues:
             print(item, file=sys.stderr)
         print(
-            "Dashboard: Authentication → Rate Limits (emails) and Authentication → SMTP. "
-            f"https://supabase.com/dashboard/project/{ref}/auth/rate-limits",
+            "Dashboard: Authentication → Rate Limits, SMTP, and Email Templates. "
+            f"https://supabase.com/dashboard/project/{ref}/auth/templates",
             file=sys.stderr,
         )
         return 2

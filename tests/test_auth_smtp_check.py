@@ -44,3 +44,20 @@ def test_ok_at_target():
         }
     )
     assert problems(summary, want=300) == []
+
+
+def test_magic_link_html_is_code_only():
+    html = check_auth_smtp.magic_link_html()
+    assert "{{ .Token }}" in html
+    assert "{{ .ConfirmationURL }}" not in html
+
+
+def test_default_magic_link_template_is_rejected():
+    issues = check_auth_smtp.template_problems(
+        {
+            "mailer_subjects_magic_link": "Your sign-in link",
+            "mailer_templates_magic_link_content": '<p><a href="{{ .ConfirmationURL }}">Sign in</a></p>',
+        }
+    )
+    assert any("sign-in link" in item for item in issues)
+    assert any("ConfirmationURL" in item for item in issues)
