@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from unittest.mock import Mock
 
 _PATH = Path(__file__).resolve().parents[1] / "scripts" / "check_auth_smtp.py"
 _SPEC = importlib.util.spec_from_file_location("check_auth_smtp", _PATH)
@@ -9,6 +10,9 @@ _SPEC.loader.exec_module(check_auth_smtp)
 problems = check_auth_smtp.problems
 project_ref = check_auth_smtp.project_ref
 summarize = check_auth_smtp.summarize
+
+_TEST_URL = "https://fybycaqosqqewrtxppny.supabase.co"
+_TEST_TOKEN = "sbp_test_token"
 
 
 def test_project_ref_from_url():
@@ -46,6 +50,30 @@ def test_ok_at_target():
     assert problems(summary, want=300) == []
 
 
+def test_missing_sender_is_not_ok():
+    summary = summarize(
+        {
+            "smtp_host": "smtp.resend.com",
+            "smtp_admin_email": "",
+            "rate_limit_email_sent": 300,
+        }
+    )
+    issues = problems(summary, want=300)
+    assert any("locks@cfbsicko.com" in item for item in issues)
+
+
+def test_wrong_local_part_is_not_ok():
+    summary = summarize(
+        {
+            "smtp_host": "smtp.resend.com",
+            "smtp_admin_email": "noreply@cfbsicko.com",
+            "rate_limit_email_sent": 300,
+        }
+    )
+    issues = problems(summary, want=300)
+    assert any("noreply@cfbsicko.com" in item for item in issues)
+
+
 def test_magic_link_html_is_code_only():
     html = check_auth_smtp.magic_link_html()
     assert "{{ .Token }}" in html
@@ -61,3 +89,111 @@ def test_default_magic_link_template_is_rejected():
     )
     assert any("sign-in link" in item for item in issues)
     assert any("ConfirmationURL" in item for item in issues)
+
+
+def _json_response(payload: dict, status_code: int = 200) -> Mock:
+    response = Mock()
+    response.status_code = status_code
+    response.json.return_value = payload
+    return response
+
+
+def _ok_auth_config(*, rate: int = 300) -> dict:
+    html = check_auth_smtp.magic_link_html()
+    config = {
+        "smtp_host": "smtp.resend.com",
+        "smtp_admin_email": "locks@cfbsicko.com",
+        "rate_limit_email_sent": rate,
+    }
+    for field in check_auth_smtp.SUBJECT_FIELDS:
+        config[field] = check_auth_smtp.MAGIC_LINK_SUBJECT
+    for field in check_auth_smtp.TEMPLATE_FIELDS:
+        config[field] = html
+    return config
+
+
+def _broken_auth_config(*, rate: int = 30) -> dict:
+    return {
+        "smtp_host": "smtp.resend.com",
+        "smtp_admin_email": "locks@cfbsicko.com",
+        "rate_limit_email_sent": rate,
+        "mailer_subjects_magic_link": "Your sign-in link",
+        "mailer_templates_magic_link_content": '<p><a href="{{ .ConfirmationURL }}">Sign in</a></p>',
+    }
+
+
+def _auth_env(monkeypatch) -> None:
+    monkeypatch.setenv("SUPABASE_URL", _TEST_URL)
+    monkeypatch.setenv("SUPABASE_ACCESS_TOKEN", _TEST_TOKEN)
+
+
+def test_enforce_patches_rate_and_templates(monkeypatch, capsys):
+    _auth_env(monkeypatch)
+    patched: list[dict] = []
+    gets = iter([_json_response(_broken_auth_config()), _json_response(_ok_auth_config())])
+
+    def fake_get(url, headers=None, timeout=None):
+        return next(gets)
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        patched.append(json)
+        return _json_response(_ok_auth_config())
+
+    monkeypatch.setattr(check_auth_smtp.requests, "get", fake_get)
+    monkeypatch.setattr(check_auth_smtp.requests, "patch", fake_patch)
+
+    assert check_auth_smtp.main(["--enforce"]) == 0
+    assert len(patched) == 1
+    assert patched[0]["rate_limit_email_sent"] == 300
+    assert "mailer_templates_magic_link_content" in patched[0]
+    out = capsys.readouterr()
+    assert "enforced emails_per_hour=300" in out.out
+    assert "enforced Proton-safe Auth templates" in out.out
+    assert "auth smtp ok" in out.out
+
+
+def test_enforce_refuses_built_in_smtp(monkeypatch, capsys):
+    _auth_env(monkeypatch)
+    patched: list[dict] = []
+
+    def fake_get(url, headers=None, timeout=None):
+        return _json_response({"smtp_host": "", "rate_limit_email_sent": 2})
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        patched.append(json)
+        raise AssertionError("PATCH must not run when custom SMTP is off")
+
+    monkeypatch.setattr(check_auth_smtp.requests, "get", fake_get)
+    monkeypatch.setattr(check_auth_smtp.requests, "patch", fake_patch)
+
+    assert check_auth_smtp.main(["--enforce"]) == 2
+    assert patched == []
+    err = capsys.readouterr().err
+    assert "refusing --enforce" in err
+    assert "cap resets to 2" in err
+
+
+def test_enforce_failed_refetch_is_an_error(monkeypatch, capsys):
+    _auth_env(monkeypatch)
+    patched: list[dict] = []
+    gets = iter(
+        [
+            _json_response(_broken_auth_config()),
+            _json_response({}, status_code=500),
+        ]
+    )
+
+    def fake_get(url, headers=None, timeout=None):
+        return next(gets)
+
+    def fake_patch(url, headers=None, json=None, timeout=None):
+        patched.append(json)
+        return _json_response(_ok_auth_config())
+
+    monkeypatch.setattr(check_auth_smtp.requests, "get", fake_get)
+    monkeypatch.setattr(check_auth_smtp.requests, "patch", fake_patch)
+
+    assert check_auth_smtp.main(["--enforce"]) == 1
+    assert len(patched) == 1
+    err = capsys.readouterr().err
+    assert "auth config HTTP 500" in err

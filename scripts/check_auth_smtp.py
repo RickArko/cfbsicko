@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANAGEMENT = "https://api.supabase.com/v1/projects"
 TARGET_EMAILS_PER_HOUR = 300
 EXPECTED_SMTP_HOST = "smtp.resend.com"
-EXPECTED_FROM_HOST = "cfbsicko.com"
+EXPECTED_FROM_EMAIL = "locks@cfbsicko.com"
 MAGIC_LINK_SUBJECT = "Your CFB Sicko code"
 TEMPLATE_FIELDS = (
     "mailer_templates_magic_link_content",
@@ -154,8 +154,8 @@ def problems(summary: dict[str, Any], *, want: int) -> list[str]:
     elif summary["smtp_host"] != EXPECTED_SMTP_HOST:
         issues.append(f"smtp_host is {summary['smtp_host']!r}, want {EXPECTED_SMTP_HOST}")
     admin = summary["smtp_admin_email"]
-    if admin and not admin.endswith(f"@{EXPECTED_FROM_HOST}"):
-        issues.append(f"smtp_admin_email is {admin!r}, want a {EXPECTED_FROM_HOST} address")
+    if admin != EXPECTED_FROM_EMAIL:
+        issues.append(f"smtp_admin_email is {admin or 'missing'!r}, want {EXPECTED_FROM_EMAIL}")
     if summary["rate_limit_email_sent"] < want:
         issues.append(f"rate_limit_email_sent={summary['rate_limit_email_sent']} (want >={want})")
     return issues
