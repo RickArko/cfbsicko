@@ -13,7 +13,11 @@ NAME = re.compile(r"^cfbsicko-\d{8}-\d{6}\.db$")
 
 def main() -> int:
     if len(sys.argv) < 2 or not sys.argv[1]:
-        latest = sorted(Path.home().joinpath(".cfbsicko/backups").glob("cfbsicko-*.db"))
+        latest = sorted(
+            path
+            for path in Path.home().joinpath(".cfbsicko/backups").glob("cfbsicko-*.db")
+            if NAME.match(path.name)
+        )
         if not latest:
             print("no backups", file=sys.stderr)
             return 2

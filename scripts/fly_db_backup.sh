@@ -8,7 +8,8 @@ mkdir -p "${DEST_DIR}"
 stamp="$(date -u +%Y%m%d-%H%M%S)"
 dest="${DEST_DIR}/${FLY_APP}-${stamp}.db"
 
+# Image has Python, not the sqlite3 CLI.
 "${FLY_BIN}" ssh console --app "${FLY_APP}" -C \
-  "sqlite3 /data/locks.db \".backup /data/locks.backup.db\""
+  "python3 -c \"import sqlite3; s=sqlite3.connect('/data/locks.db'); d=sqlite3.connect('/data/locks.backup.db'); s.backup(d); d.close(); s.close()\""
 "${FLY_BIN}" ssh sftp get --app "${FLY_APP}" /data/locks.backup.db "${dest}"
 printf '%s\n' "${dest}"

@@ -81,6 +81,9 @@ Same as [docs/deployment/transactional-email.md](../../docs/deployment/transacti
 1. Verify `cfbsicko.com` in Resend (`send.` subdomain records — do not replace Fly A/AAAA).
 2. Supabase → Authentication → SMTP: host `smtp.resend.com`, port `465`, user `resend`, password = Resend API key, from `locks@cfbsicko.com`.
 3. Raise Auth emails/hour off `2` (300 is fine for twelve people).
+   That lives on **Authentication → Rate Limits**, not the SMTP form. Enabling
+   custom SMTP only sets **30**; disabling SMTP resets to **2**. Persist with
+   `make supabase.auth-smtp` / `ENFORCE=1` after `SUPABASE_ACCESS_TOKEN` is in `.env`.
 4. Product SMTP on Fly (`SMTP_*`) is a different path (slate / reminder / standings). Both should use Resend.
 
 Until this lands, “Send code” will 429 after two messages.
