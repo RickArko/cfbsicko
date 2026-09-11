@@ -14,6 +14,7 @@ os.environ.setdefault("SUPABASE_URL", "")
 os.environ.setdefault("REQUIRE_EMAIL_CONFIRMED", "true")
 os.environ.setdefault("COMMISH_ALLOWED_EMAILS", "commish@example.com")
 os.environ.setdefault("PUBLIC_APP_URL", "http://test")
+os.environ["PRODUCT_MAIL"] = "true"
 os.environ["DATABASE_PATH"] = "/tmp/cfbsicko-pytest-unused.db"
 
 from cfbsicko.config import reload_config

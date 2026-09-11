@@ -2,6 +2,7 @@ from email.message import EmailMessage
 
 import pytest
 
+from cfbsicko.cli import main
 from cfbsicko.mail import (
     group_invite_body,
     group_invite_review_body,
@@ -87,6 +88,38 @@ def test_trial_roster_empty_raises(monkeypatch, tmp_path):
     monkeypatch.setenv("CFBSICKO_TRIAL_ROSTER_FILE", str(tmp_path / "missing.txt"))
     with pytest.raises(RuntimeError, match="empty"):
         trial_emails()
+
+
+def test_product_mail_off_does_not_send(monkeypatch):
+    from cfbsicko.config import reload_config
+
+    sender = RecordingSender()
+    set_sender_factory(lambda: sender)
+    monkeypatch.setenv("PRODUCT_MAIL", "false")
+    reload_config()
+    try:
+        assert send_mail("a@example.com", "blast", "body") == "disabled"
+        assert sender.messages == []
+    finally:
+        monkeypatch.delenv("PRODUCT_MAIL", raising=False)
+        monkeypatch.setenv("PRODUCT_MAIL", "true")
+        reload_config()
+        set_sender_factory(None)
+
+
+def test_invite_blast_refuses_when_mail_off(monkeypatch, capsys):
+    from cfbsicko.config import reload_config
+
+    monkeypatch.setenv("PRODUCT_MAIL", "false")
+    monkeypatch.setenv("CFBSICKO_TRIAL_ROSTER", "commish@example.com|Rick,player@example.com|Stu")
+    monkeypatch.delenv("CFBSICKO_TRIAL_ROSTER_FILE", raising=False)
+    reload_config()
+    try:
+        assert main(["invite-group", "--blast", "--i-reviewed"]) == 2
+        assert "PRODUCT_MAIL is off" in capsys.readouterr().err
+    finally:
+        monkeypatch.setenv("PRODUCT_MAIL", "true")
+        reload_config()
 
 
 def test_group_blast_uses_bcc():

@@ -98,8 +98,15 @@ if [[ -n "${SMTP_HOST:-}" && -n "${SMTP_FROM:-}" ]]; then
     SMTP_FROM="${SMTP_FROM}"
     SMTP_USER="${SMTP_USER:-resend}"
   )
-  if [[ -n "${SMTP_PASSWORD:-}" ]]; then
-    args+=(SMTP_PASSWORD="${SMTP_PASSWORD}")
+  product_mail="$(printf '%s' "${PRODUCT_MAIL:-true}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${product_mail}" == "0" || "${product_mail}" == "false" || "${product_mail}" == "off" || "${product_mail}" == "no" ]]; then
+    args+=(PRODUCT_MAIL=off)
+    printf '  PRODUCT_MAIL=off (not copying SMTP_PASSWORD)\n'
+  else
+    args+=(PRODUCT_MAIL=on)
+    if [[ -n "${SMTP_PASSWORD:-}" ]]; then
+      args+=(SMTP_PASSWORD="${SMTP_PASSWORD}")
+    fi
   fi
 fi
 

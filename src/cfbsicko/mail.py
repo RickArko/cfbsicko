@@ -267,6 +267,8 @@ def send_mail(
     bcc: list[str] | None = None,
     html: str | None = None,
 ) -> str:
+    if not Config.product_mail_enabled():
+        return "disabled"
     return get_sender().send(_message(to, subject, body, bcc=bcc, html=html))
 
 

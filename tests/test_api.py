@@ -9,6 +9,7 @@ def test_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["ok"] is True
+    assert r.json()["product_mail"] is True
 
 
 def test_auth_config_has_no_secrets(client):

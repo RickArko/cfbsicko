@@ -106,6 +106,8 @@ def enqueue_mail(
     title: str | None = None,
     href: str = "/app",
 ) -> bool:
+    if not Config.product_mail_enabled():
+        return False
     payload = {"subject": subject, "body": body, "html": html or branded_html(subject, body, href=href)}
     when = (send_after or datetime(1970, 1, 1, tzinfo=EASTERN)).isoformat()
     cur = conn.execute(
@@ -330,6 +332,8 @@ def _run_job(conn: sqlite3.Connection, job: dict[str, Any], now: datetime) -> No
 
 
 def tick_outbox(conn: sqlite3.Connection, now: datetime, send: SendFn) -> int:
+    if not Config.product_mail_enabled():
+        return 0
     now = _as_aware(now)
     _unlock_stale(conn, now)
     rows = conn.execute(

@@ -12,6 +12,7 @@ SEASON ?= 2026
 .PHONY: bootstrap run test lint fmt supabase.check supabase.auth-smtp \
 	invite-review invite-blast \
 	fly.app fly.volume fly.secrets fly.test-login fly.test-login-off \
+	fly.mail-off fly.mail-on \
 	fly.deploy fly.status fly.logs fly.certs \
 	fly.db-backup fly.db-backup-verify fly.db-restore import-sheet \
 	extract-sheet seed-csv fly.seed-csv replay-week1 publish-week2
@@ -90,6 +91,12 @@ fly.test-login:
 
 fly.test-login-off:
 	FLY_APP="$(FLY_APP)" FLY_BIN="$(FLY)" bash scripts/fly_set_test_login.sh off
+
+fly.mail-off:
+	FLY_APP="$(FLY_APP)" FLY_BIN="$(FLY)" bash scripts/fly_set_product_mail.sh off
+
+fly.mail-on:
+	FLY_APP="$(FLY_APP)" FLY_BIN="$(FLY)" bash scripts/fly_set_product_mail.sh on
 
 fly.deploy:
 	$(FLY) deploy --app $(FLY_APP)

@@ -211,6 +211,8 @@ async def _run_live_ticks(app: FastAPI) -> None:
 
 
 def _dispatch_mail(app: FastAPI, to: str, subject: str, body: str, html: str | None = None) -> str:
+    if not Config.product_mail_enabled():
+        return "disabled"
     if app.state.mail_send is not None:
         try:
             return app.state.mail_send(to, subject, body, html=html)
@@ -332,6 +334,7 @@ def create_app(
             "service": "cfbsicko",
             "season": Config.SEASON,
             "frontend": frontend is not None,
+            "product_mail": Config.product_mail_enabled(),
         }
 
     @app.get("/api/auth/config")
@@ -554,8 +557,7 @@ def create_app(
         )
         mailed = False
         try:
-            _mail(invite["email"], subject, text)
-            mailed = True
+            mailed = _mail(invite["email"], subject, text) != "disabled"
         except Exception:
             mailed = False
         return {"email": invite["email"], "display_name": invite["display_name"], "mailed": mailed}
@@ -586,8 +588,7 @@ def create_app(
         )
         mailed = False
         try:
-            _mail(invite["email"], subject, text)
-            mailed = True
+            mailed = _mail(invite["email"], subject, text) != "disabled"
         except Exception:
             mailed = False
         return {
@@ -797,8 +798,8 @@ def create_app(
         )
         sent = 0
         for email in list_invited_emails(db(), league_id=int(league["id"])):
-            _mail(email, subject, body)
-            sent += 1
+            if _mail(email, subject, body) != "disabled":
+                sent += 1
         return {"sent": sent}
 
     if frontend is not None:

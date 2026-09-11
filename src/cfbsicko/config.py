@@ -66,6 +66,17 @@ class Config:
     }
     CRON_TOKEN: str = os.getenv("CRON_TOKEN") or ""
     CFBD_API_KEY: str = os.getenv("CFBD_API_KEY") or ""
+    PRODUCT_MAIL: bool = (os.getenv("PRODUCT_MAIL") or "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+    @classmethod
+    def product_mail_enabled(cls) -> bool:
+        """League SMTP + outbox. Off until launch is approved. Auth OTP is separate."""
+        return cls.PRODUCT_MAIL
 
     @classmethod
     def database_path(cls) -> Path:
@@ -148,3 +159,9 @@ def reload_config() -> None:
     }
     Config.CRON_TOKEN = os.getenv("CRON_TOKEN") or ""
     Config.CFBD_API_KEY = os.getenv("CFBD_API_KEY") or ""
+    Config.PRODUCT_MAIL = (os.getenv("PRODUCT_MAIL") or "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }

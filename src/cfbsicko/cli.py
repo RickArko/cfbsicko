@@ -172,6 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "mail-probe":
         from cfbsicko.mail import send_probe
 
+        if not Config.product_mail_enabled():
+            print("PRODUCT_MAIL is off — refusing to send", file=sys.stderr)
+            return 2
         send_probe(args.to, kind=args.kind)
         print("sent")
         return 0
@@ -197,6 +200,9 @@ def main(argv: list[str] | None = None) -> int:
             print("refusing --blast without --i-reviewed (send a --review first)", file=sys.stderr)
             return 2
 
+        if (args.review or args.blast) and not Config.product_mail_enabled():
+            print("PRODUCT_MAIL is off — refusing to send", file=sys.stderr)
+            return 2
         if args.review:
             subject, body = group_invite_review_body(app_url=app_url, recipients=recipients)
             try:
